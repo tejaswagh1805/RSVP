@@ -1,0 +1,32 @@
+{
+  "name": "rsvp-dxb-admin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "node server/index.js",
+    "dev:server:watch": "node --watch server/index.js",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "db:setup": "node server/setup-db.js",
+    "db:import-members": "node server/import-members.js",
+    "admin:reset-password": "node server/reset-admin-password.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "vite": "^6.0.7"
+  }
+}
