@@ -42,7 +42,19 @@ export default function Members({ rows, query, setQuery }) {
       const isExpanded = expandedId === row.id;
       const toggle = () => setExpandedId((current) => current === row.id ? null : row.id);
       return <Fragment key={row.id}>
-        <tr className={`member-table-row${isExpanded ? ' member-table-row-open' : ''}`}>
+        <tr
+          className={`member-table-row${isExpanded ? ' member-table-row-open' : ''}`}
+          tabIndex={0}
+          aria-expanded={isExpanded}
+          aria-controls={`member-details-${row.id}`}
+          onClick={(event) => { if (!event.target.closest('button, a, input, select, textarea')) toggle(); }}
+          onKeyDown={(event) => {
+            if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault();
+              toggle();
+            }
+          }}
+        >
           <td><button className="member-summary-button" onClick={toggle} aria-expanded={isExpanded} aria-controls={`member-details-${row.id}`}>
             <span className="member-avatar" aria-hidden="true">{initials(row.name)}</span>
             <span className="member-summary-copy"><strong>{row.name}</strong><span>{row.email}</span></span>

@@ -201,7 +201,8 @@ td strong { color: #dedbd3; font-size: 10px; font-weight: 500; }
 .track-1 { background: #a890bd; }.track-2 { background: #7da889; }.track-3 { background: #bc7f76; }
 .member-cell > div span, .event-name-cell > div span { color: #77766f; font-size: 9px; }
 .member-table { min-width: 1060px; }
-.member-table-row { transition: background .16s ease; }
+.member-table-row { cursor: pointer; transition: background .16s ease; }
+.member-table-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .member-table-row:hover, .member-table-row-open { background: #1c1b18; }
 .member-table-row-open td { border-bottom-color: transparent; }
 .member-summary-button { display: flex; align-items: center; gap: 11px; min-width: 205px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
