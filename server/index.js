@@ -23,7 +23,7 @@ const demoAdmins = sql ? [] : await Promise.all([
 ].map(async (admin) => ({ ...admin, passwordHash: await hashPassword(admin.password) })));
 
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '3mb' }));
 
 async function currentAdmin(req) {
   const token = getSessionToken(req);
@@ -90,7 +90,7 @@ const tableFor = { applications: 'applications', members: 'members', events: 'ev
 const selectFor = {
   applications: 'SELECT id, name, email, track, city, detail, followers, profile_url AS "profileUrl", handle, platform, mobile, outlet, application_role AS role, all_profiles AS "allProfiles", source_track AS "sourceTrack", submitted::text AS submitted, status FROM applications ORDER BY submitted DESC',
   members: 'SELECT id, name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
-  events: 'SELECT id, title, brand, venue, date::text AS date, time, area, category, tracks, capacity, confirmed, status FROM events ORDER BY date',
+  events: 'SELECT id, title, brand, venue, date::text AS date, time, area, category, tracks, capacity, confirmed, dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", status FROM events ORDER BY date',
   wall_posts: 'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   clients: 'SELECT id, name, package, credits, events, status FROM clients ORDER BY name',
   guests: 'SELECT id, name, track, event_id AS "eventId", plus_ones AS "plusOnes", code, checked_in_at AS "checkedInAt", status FROM guests ORDER BY name',
@@ -235,16 +235,34 @@ app.patch('/api/applications/:id', async (req, res, next) => {
 
 app.post('/api/events', async (req, res, next) => {
   try {
-    const { title, brand, venue = '', date, time = '', capacity = 80, category = 'Dining', tracks = [], status = 'draft' } = req.body;
-    if (!title?.trim() || !brand?.trim() || !date) return res.status(400).json({ error: 'Event title, brand and date are required.' });
+    const title = text(req.body.title, 180);
+    const brand = text(req.body.brand, 180);
+    const venue = text(req.body.venue, 240);
+    const area = text(req.body.area, 120);
+    const date = text(req.body.date, 10);
+    const time = text(req.body.time, 40);
+    const category = text(req.body.category, 80) || 'Dining';
+    const capacity = Number(req.body.capacity || 80);
+    const status = String(req.body.status || 'draft');
+    const allowedTracks = ['Media', 'Creators', 'Tastemakers', 'Private Circle'];
+    const tracks = Array.isArray(req.body.tracks) ? [...new Set(req.body.tracks.map((item) => text(item, 40)).filter((item) => allowedTracks.includes(item)))] : [];
+    const dressCode = text(req.body.dressCode, 180);
+    const about = text(req.body.about, 5000);
+    const included = Array.isArray(req.body.included) ? req.body.included.map((item) => text(item, 300)).filter(Boolean).slice(0, 30) : [];
+    const whoIsInvited = text(req.body.whoIsInvited, 1500);
+    const hostNote = text(req.body.hostNote, 1500);
+    const imageData = String(req.body.imageData || '');
+    if (!title || !brand || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Event title, brand and a valid date are required.' });
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100000) return res.status(400).json({ error: 'Enter a guest capacity above zero.' });
+    if (!['draft', 'published', 'pending', 'closed'].includes(status)) return res.status(400).json({ error: 'Invalid event status.' });
+    if (imageData && (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(imageData) || imageData.length > 2_100_000)) return res.status(400).json({ error: 'Use a JPG, PNG or WebP image up to 1.5 MB.' });
     const id = `event-${crypto.randomUUID()}`;
-    const event = { id, title: title.trim(), brand: brand.trim(), venue, date, time, capacity: Number(capacity), confirmed: 0, category, tracks, status };
+    const event = { id, title, brand, venue, area, date, time, capacity, confirmed: 0, category, tracks, dressCode, about, included, whoIsInvited, hostNote, imageData, status };
     if (!sql) demo.events.unshift(event);
-    else await sql`INSERT INTO events (id, title, brand, venue, date, time, capacity, confirmed, category, tracks, status) VALUES (${id}, ${event.title}, ${event.brand}, ${event.venue}, ${event.date}, ${event.time}, ${event.capacity}, 0, ${category}, ${tracks}, ${status})`;
+    else await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${status})`;
     res.status(201).json(event);
   } catch (error) { next(error); }
 });
-
 app.patch('/api/events/:id', async (req, res, next) => {
   try {
     const { status } = req.body;
