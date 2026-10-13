@@ -105,6 +105,21 @@ CREATE TABLE IF NOT EXISTS guests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS guest_invitations (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  guest_name TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  table_no TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+  plus_ones INTEGER NOT NULL DEFAULT 0 CHECK (plus_ones BETWEEN 0 AND 2),
+  checked_in_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  responded_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -162,5 +177,7 @@ ALTER TABLE events ADD CONSTRAINT events_status_check CHECK (status IN ('draft',
 CREATE INDEX IF NOT EXISTS applications_status_idx ON applications(status, submitted DESC);
 CREATE INDEX IF NOT EXISTS events_date_idx ON events(date);
 CREATE INDEX IF NOT EXISTS guests_event_idx ON guests(event_id);
+CREATE INDEX IF NOT EXISTS guest_invitations_event_created_idx ON guest_invitations(event_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS guest_invitations_event_status_idx ON guest_invitations(event_id, status);
 CREATE INDEX IF NOT EXISTS admin_sessions_expiry_idx ON admin_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS members_track_idx ON members(track, rank);

@@ -15,6 +15,7 @@
     "admin:reset-password": "node server/reset-admin-password.js"
   },
   "dependencies": {
+    "@aws-sdk/client-ses": "^3.1150.0",
     "@neondatabase/serverless": "^1.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Applications from './pages/Applications.jsx';
 import Members from './pages/Members.jsx';
 import Events, { EventModal, GuestModal } from './pages/Events.jsx';
+import Invitations from './pages/Invitations.jsx';
 import Wall from './pages/Wall.jsx';
 import Clients from './pages/Clients.jsx';
 import Door from './pages/Door.jsx';
@@ -97,6 +98,7 @@ export default function App() {
     applications: <Applications rows={data.applications} query={search} setQuery={setSearch} act={act} />,
     members: <Members rows={data.members} query={search} setQuery={setSearch} />,
     events: <Events rows={data.events} guests={data.guests} act={act} openModal={setModal} />,
+    invitations: <Invitations events={data.events} />,
     wall: <Wall rows={data.wall} act={act} />,
     clients: <Clients rows={data.clients} act={act} />,
     door: <Door guests={data.guests} events={data.events} act={act} />,

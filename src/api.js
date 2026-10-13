@@ -29,4 +29,8 @@ export const api = {
   addCredits: (id, amount) => request(`/clients/${id}/credits`, { method: 'POST', body: JSON.stringify({ amount }) }),
   scan: (code) => request('/door/scan', { method: 'POST', body: JSON.stringify({ code }) }),
   walkIn: (guest) => request('/door/walk-ins', { method: 'POST', body: JSON.stringify(guest) }),
+  guestInvitations: (eventId) => request(`/guest-invitations?eventId=${encodeURIComponent(eventId)}`),
+  createGuestInvitation: (guest) => request('/guest-invitations', { method: 'POST', body: JSON.stringify(guest) }),
+  checkInGuestInvitation: (id) => request(`/door/guest-invitations/${encodeURIComponent(id)}/check-in`, { method: 'POST' }),
+  scanGuestPass: (code, eventId) => request('/door/guest-pass', { method: 'POST', body: JSON.stringify({ code, eventId }) }),
 };

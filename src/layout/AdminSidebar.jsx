@@ -1,10 +1,10 @@
-import { CalendarDays, ChevronDown, CircleHelp, ExternalLink, FileText, Home, Radio, ScanLine, Users, WalletCards, X } from 'lucide-react';
+import { CalendarDays, ChevronDown, CircleHelp, ExternalLink, FileText, Home, Radio, ScanLine, TicketCheck, Users, WalletCards, X } from 'lucide-react';
 import AccountMenu from '../components/AccountMenu.jsx';
 
 const SECTIONS = [
   { title: 'OVERVIEW', links: [['Dashboard', 'dashboard', Home]] },
   { title: 'PEOPLE', links: [['Applications', 'applications', FileText], ['Members', 'members', Users]] },
-  { title: 'PROGRAMME', links: [['Events', 'events', CalendarDays], ['Events Wall', 'wall', Radio]] },
+  { title: 'PROGRAMME', links: [['Events', 'events', CalendarDays], ['Invitations', 'invitations', TicketCheck], ['Events Wall', 'wall', Radio]] },
   { title: 'BUSINESS', links: [['Clients & credits', 'clients', WalletCards]] },
   { title: 'OPERATIONS', links: [['Door app', 'door', ScanLine]] },
 ];
