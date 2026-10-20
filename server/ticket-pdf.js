@@ -41,7 +41,7 @@ export function createTicketPdf(ticket) {
     '0.88 0.84 0.75 RG 40 154 515 526 re S',
     text('EVENT', 62, 644, 9, '0.47 0.39 0.25'),
     text(ticket.eventTitle, 62, 610, 24),
-    text(`${ticket.date}${ticket.time ? `  ·  ${ticket.time}` : ''}`, 62, 578, 12, '0.35 0.33 0.29'),
+    text(`${ticket.date}${ticket.time ? `  |  ${ticket.time}` : ''}`, 62, 578, 12, '0.35 0.33 0.29'),
     text(ticket.venue || 'See event details', 62, 555, 12, '0.35 0.33 0.29'),
     '0.90 0.87 0.80 RG 62 530 m 533 530 l S',
     text('GUEST', 62, 498, 9, '0.47 0.39 0.25'),
@@ -53,12 +53,12 @@ export function createTicketPdf(ticket) {
     text('SCAN AT THE DOOR', 354, 568, 10, '0.47 0.39 0.25'),
     ...drawQr(ticket.ticketToken, 350, 382, qrSide),
     text('One-time entry validation', 354, 359, 9, '0.35 0.33 0.29'),
-    text('TICKET REFERENCE', 62, 306, 9, '0.47 0.39 0.25'),
-    text(ticket.id, 62, 283, 11),
+    text('ENTRY STATUS', 62, 306, 9, '0.47 0.39 0.25'),
+    text('Confirmed', 62, 283, 13),
     '0.90 0.87 0.80 RG 62 253 m 533 253 l S',
-    text('Present this ticket at the entrance. The QR code is unique to this ticket.', 62, 219, 10, '0.35 0.33 0.29'),
-    text('A ticket can be checked in once only.', 62, 199, 10, '0.35 0.33 0.29'),
-    text('RSVP DXB  ·  Dubai, UAE', 48, 88, 10, '0.47 0.39 0.25'),
+    text('Show this QR code at the entrance.', 62, 219, 10, '0.35 0.33 0.29'),
+    text('Valid for one entry only.', 62, 199, 10, '0.35 0.33 0.29'),
+    text('RSVP DXB  |  Dubai, UAE', 48, 88, 10, '0.47 0.39 0.25'),
   ];
   const stream = commands.join('\n');
   const objects = [
