@@ -516,6 +516,8 @@ async function sendInfobipWhatsAppPayment(to, checkoutUrl, event, guestName, amo
     "\nTap Pay now to complete secure payment. Your PDF ticket will be sent to this chat after payment is confirmed.",
   ].filter(Boolean).join("\n");
 
+  const apiHost = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+  const eventImage = event.imageData ? `${apiHost}/api/events/${encodeURIComponent(event.id)}/image` : "";
   const response = await fetch(`${base}/whatsapp/1/message/interactive/url-button`, {
     method: "POST",
     headers: { Authorization: `App ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
@@ -523,10 +525,12 @@ async function sendInfobipWhatsAppPayment(to, checkoutUrl, event, guestName, amo
       from: sender,
       to,
       content: {
-        header: { type: "TEXT", text: "RSVP DXB · Ticket checkout" },
+        header: eventImage
+          ? { type: "IMAGE", mediaUrl: eventImage }
+          : { type: "TEXT", text: "RSVP DXB · Ticket checkout" },
         body: { text: details },
         footer: { text: "Secure checkout powered by Stripe" },
-        action: { title: "Pay now", url: checkoutUrl },
+        action: { displayText: "Pay now", url: checkoutUrl },
       },
     }),
     signal: AbortSignal.timeout(10000),
@@ -595,6 +599,32 @@ function verifyStripeSignature(req) {
 app.get("/api/health", (_req, res) =>
   res.json({ ok: true, database: Boolean(sql) }),
 );
+app.get("/api/events/:id/image", async (req, res, next) => {
+  try {
+    if (!sql) return res.status(404).end();
+    const rows = await sql`SELECT image_data AS "imageData" FROM events WHERE id = ${req.params.id} LIMIT 1`;
+    const match = String(rows[0]?.imageData || "").match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
+    if (!match) return res.status(404).end();
+    res.set({ "Content-Type": match[1].toLowerCase(), "Cache-Control": "public, max-age=3600" });
+    res.send(Buffer.from(match[2], "base64"));
+  } catch (error) { next(error); }
+});
+app.get("/api/pay/:requestId", async (req, res, next) => {
+  try {
+    if (!sql) return res.status(404).send("Checkout not found.");
+    const secret = String(process.env.STRIPE_SECRET_KEY || "").trim();
+    if (!secret) return res.status(503).send("Checkout is temporarily unavailable.");
+    const rows = await sql`SELECT stripe_session_id AS "sessionId", status FROM ticket_requests WHERE id = ${req.params.requestId} LIMIT 1`;
+    if (!rows[0]?.sessionId || rows[0].status !== "awaiting_payment") return res.status(404).send("This checkout is no longer available.");
+    const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(rows[0].sessionId)}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const session = await response.json();
+    if (!response.ok || !session.url) return res.status(410).send("This checkout link has expired. Please request a new ticket link in WhatsApp.");
+    res.set("Cache-Control", "no-store").redirect(303, session.url);
+  } catch (error) { next(error); }
+});
 app.get("/api/tickets/:token.pdf", async (req, res, next) => {
   try {
     if (!sql) return res.status(404).json({ error: "Ticket not found." });
@@ -657,7 +687,7 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         ? ""
         : input.split(/\r?\n/)[0].replace(/\s+\d{4}-\d{2}-\d{2}.*$/, "").trim();
       const event = sql
-        ? (await sql`SELECT id, title, date::text AS date, time, venue, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE (id = ${selectedEventId} OR lower(title) = lower(${selectedEventTitle})) AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
+        ? (await sql`SELECT id, title, date::text AS date, time, venue, image_data AS "imageData", ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE (id = ${selectedEventId} OR lower(title) = lower(${selectedEventTitle})) AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
         : demo.events.find((row) => (row.id === selectedEventId || row.title.toLowerCase() === selectedEventTitle.toLowerCase()) && row.status === "published" && row.date >= new Date().toISOString().slice(0, 10));
       if (!event) {
         await sendInfobipWhatsApp(phone, "Please send “events” to see the current list, then select an event.");
@@ -679,8 +709,10 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         const checkout = await createStripeCheckout({ requestId: id, event, amount, currency });
         await sql`UPDATE ticket_requests SET status = 'awaiting_payment', stripe_session_id = ${checkout.id} WHERE id = ${id} AND status = 'pending'`;
         const guestName = text(item.contact?.name, 120);
+        const apiHost = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+        const shortCheckoutUrl = `${apiHost}/api/pay/${encodeURIComponent(id)}`;
         try {
-          await sendInfobipWhatsAppPayment(phone, checkout.url, event, guestName, amount, currency);
+          await sendInfobipWhatsAppPayment(phone, shortCheckoutUrl, event, guestName, amount, currency);
         } catch (error) {
           console.error("Infobip payment button send failed:", error?.message || error);
           const details = [
@@ -689,7 +721,7 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
             event.venue ? `Venue: ${event.venue}` : "",
             guestName ? `Guest: ${guestName}` : "",
             `Total: ${amount.toFixed(2)} ${currency}`,
-            `Pay securely: ${checkout.url}`,
+            `Pay securely: ${shortCheckoutUrl}`,
             "Your PDF ticket will be sent here after payment is confirmed.",
           ].filter(Boolean).join("\n");
           await sendInfobipWhatsApp(phone, details);
