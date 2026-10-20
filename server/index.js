@@ -1261,7 +1261,10 @@ app.post("/api/events", async (req, res, next) => {
       : [];
     const whoIsInvited = text(req.body.whoIsInvited, 1500);
     const hostNote = text(req.body.hostNote, 1500);
-    const imageData = String(req.body.imageData || "");
+    const imageDataList = Array.isArray(req.body.imageDataList)
+      ? req.body.imageDataList.map((value) => String(value || ""))
+      : req.body.imageData ? [String(req.body.imageData)] : [];
+    const imageData = imageDataList[0] || "";
     if (!title || !brand || !/^\d{4}-\d{2}-\d{2}$/.test(date))
       return res
         .status(400)
@@ -1275,15 +1278,13 @@ app.post("/api/events", async (req, res, next) => {
     if (!["draft", "published", "pending", "closed"].includes(status))
       return res.status(400).json({ error: "Invalid event status." });
     if (
-      imageData &&
-      (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(
-        imageData,
-      ) ||
-        imageData.length > 2_100_000)
+      imageDataList.length > 5 ||
+      imageDataList.some((image) => !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(image)) ||
+      imageDataList.reduce((total, image) => total + image.length, 0) > 2_100_000
     )
       return res
         .status(400)
-        .json({ error: "Use a JPG, PNG or WebP image up to 1.5 MB." });
+        .json({ error: "Use up to 5 JPG, PNG or WebP images, 1.5 MB total." });
     const id = `event-${crypto.randomUUID()}`;
     const event = {
       id,
@@ -1305,11 +1306,12 @@ app.post("/api/events", async (req, res, next) => {
       whoIsInvited,
       hostNote,
       imageData,
+      imageDataList,
       status,
     };
     if (!sql) demo.events.unshift(event);
     else
-      await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, ticket_price, ticket_currency, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${status})`;
+      await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, ticket_price, ticket_currency, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${status})`;
     res.status(201).json(event);
   } catch (error) {
     next(error);

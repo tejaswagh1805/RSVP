@@ -7,13 +7,27 @@ export default function Events({ rows, guests, act, openModal }) {
   const [filter, setFilter] = useState('all');
   const [ticketRequests, setTicketRequests] = useState([]);
   const [busyTicket, setBusyTicket] = useState('');
+  const [priceEvent, setPriceEvent] = useState(null);
+  const [priceValue, setPriceValue] = useState('');
+  const [priceError, setPriceError] = useState('');
+  const [savingPrice, setSavingPrice] = useState(false);
   useEffect(() => { api.ticketRequests().then(setTicketRequests).catch(() => setTicketRequests([])); }, []);
-  const setEventPrice = async (event) => {
-    const value = window.prompt(`Ticket price in AED for ${event.title}`, String(event.ticketPrice ?? 0));
-    if (value === null) return;
-    const ticketPrice = Number(value);
-    if (!Number.isFinite(ticketPrice) || ticketPrice < 0) { window.alert('Enter a valid price of 0 or more.'); return; }
-    await act(() => api.updateEvent(event.id, { ticketPrice, ticketCurrency: 'AED' }), 'Ticket price updated');
+  const setEventPrice = (event) => {
+    setPriceEvent(event);
+    setPriceValue(String(event.ticketPrice ?? 0));
+    setPriceError('');
+  };
+  const saveEventPrice = async () => {
+    const ticketPrice = Number(priceValue);
+    if (priceValue.trim() === '' || !Number.isFinite(ticketPrice) || ticketPrice < 0) {
+      setPriceError('Enter a valid price of AED 0 or more.');
+      return;
+    }
+    setSavingPrice(true);
+    let saved = false;
+    await act(async () => { await api.updateEvent(priceEvent.id, { ticketPrice, ticketCurrency: 'AED' }); saved = true; }, 'Ticket price updated');
+    setSavingPrice(false);
+    if (saved) setPriceEvent(null);
   };
   const approveFreeTicket = async (ticket) => {
     setBusyTicket(ticket.id);
@@ -22,28 +36,37 @@ export default function Events({ rows, guests, act, openModal }) {
     setBusyTicket('');
   };
   const shown = rows.filter((event) => filter === 'all' || event.status === filter);
-  return <><PageIntro title="Event programme" detail="Create, review and publish experiences across Dubai." action={<div className="event-filter"><button className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>All events</button><button className={filter === 'published' ? 'selected' : ''} onClick={() => setFilter('published')}>Published</button><button className={filter === 'pending' ? 'selected' : ''} onClick={() => setFilter('pending')}>Needs review</button></div>} /><div className="panel table-panel table-scroll"><table><thead><tr><th>EVENT</th><th>BRAND</th><th>DATE & TIME</th><th>GUESTS</th><th>STATUS</th><th>AUDIENCE</th><th>TICKET PRICE</th><th /></tr></thead><tbody>{shown.map((event) => <tr key={event.id}><td><div className="event-name-cell"><span className="event-thumb">{event.category?.slice(0, 1) || 'E'}</span><div><strong>{event.title}</strong><span>{event.venue}</span></div></div></td><td>{event.brand}</td><td>{dateLabel(event.date)}<span className="table-subline">{event.time}</span></td><td><strong>{event.confirmed || 0}</strong><span className="muted-text"> / {event.capacity}</span></td><td><span className={`status-tag status-${event.status}`}>{event.status}</span></td><td>{(event.tracks || []).map((name) => name === 'Private Circle' ? 'Private' : name).join(', ')}</td><td>{Number(event.ticketPrice || 0).toFixed(2)} {event.ticketCurrency || 'AED'}</td><td><div className="table-actions"><button className="small-action" onClick={() => setEventPrice(event)}>Edit price</button>{event.status === 'pending' ? <button className="small-action publish-action" onClick={() => act(() => api.updateEvent(event.id, 'published'), 'Event published')}>Publish</button> : <button className="small-action" onClick={() => act(() => api.updateEvent(event.id, 'closed'), 'RSVPs closed')}>Close RSVPs</button>}<button className="small-action" onClick={() => openModal({ type: 'guest-list', event })}>Guest list</button></div></td></tr>)}</tbody></table>{shown.length === 0 && <EmptyState title="No events in this view" detail="Create an event to fill your programme." />}</div>{ticketRequests.length > 0 && <section className="panel table-panel table-scroll" style={{ marginTop: 24 }}><h2 style={{ padding: 20 }}>WhatsApp ticket requests</h2><table><thead><tr><th>GUEST</th><th>EVENT</th><th>PHONE</th><th>PRICE</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{ticketRequests.map((item) => <tr key={item.id}><td>{item.guestName || "WhatsApp guest"}</td><td>{item.eventTitle}</td><td>{item.phone}</td><td>{Number(item.amount).toFixed(2)} {item.currency}</td><td>{item.status}{item.ticketDeliveredAt ? ' · PDF sent' : ''}</td><td>{Number(item.amount) === 0 && ['pending', 'approved'].includes(item.status) && !item.ticketDeliveredAt ? <button className="small-action publish-action" disabled={busyTicket === item.id} onClick={() => approveFreeTicket(item)}>{busyTicket === item.id ? 'Sending…' : item.status === 'pending' ? 'Approve & send PDF' : 'Retry PDF'}</button> : Number(item.amount) > 0 && item.status === 'awaiting_payment' ? 'Awaiting payment' : Number(item.amount) > 0 && item.status === 'paid' ? 'Payment confirmed' : '—'}</td></tr>)}</tbody></table></section>}</>;
+  return <><PageIntro title="Event programme" detail="Create, review and publish experiences across Dubai." action={<div className="event-filter"><button className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>All events</button><button className={filter === 'published' ? 'selected' : ''} onClick={() => setFilter('published')}>Published</button><button className={filter === 'pending' ? 'selected' : ''} onClick={() => setFilter('pending')}>Needs review</button></div>} /><div className="panel table-panel table-scroll"><table><thead><tr><th>EVENT</th><th>BRAND</th><th>DATE & TIME</th><th>GUESTS</th><th>STATUS</th><th>AUDIENCE</th><th>TICKET PRICE</th><th /></tr></thead><tbody>{shown.map((event) => <tr key={event.id}><td><div className="event-name-cell"><span className="event-thumb">{event.category?.slice(0, 1) || 'E'}</span><div><strong>{event.title}</strong><span>{event.venue}</span></div></div></td><td>{event.brand}</td><td>{dateLabel(event.date)}<span className="table-subline">{event.time}</span></td><td><strong>{event.confirmed || 0}</strong><span className="muted-text"> / {event.capacity}</span></td><td><span className={`status-tag status-${event.status}`}>{event.status}</span></td><td>{(event.tracks || []).map((name) => name === 'Private Circle' ? 'Private' : name).join(', ')}</td><td>{Number(event.ticketPrice || 0).toFixed(2)} {event.ticketCurrency || 'AED'}</td><td><div className="table-actions"><button className="small-action" onClick={() => setEventPrice(event)}>Edit price</button>{event.status === 'pending' ? <button className="small-action publish-action" onClick={() => act(() => api.updateEvent(event.id, 'published'), 'Event published')}>Publish</button> : <button className="small-action" onClick={() => act(() => api.updateEvent(event.id, 'closed'), 'RSVPs closed')}>Close RSVPs</button>}<button className="small-action" onClick={() => openModal({ type: 'guest-list', event })}>Guest list</button></div></td></tr>)}</tbody></table>{shown.length === 0 && <EmptyState title="No events in this view" detail="Create an event to fill your programme." />}</div>{ticketRequests.length > 0 && <section className="panel table-panel table-scroll" style={{ marginTop: 24 }}><h2 style={{ padding: 20 }}>WhatsApp ticket requests</h2><table><thead><tr><th>GUEST</th><th>EVENT</th><th>PHONE</th><th>PRICE</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{ticketRequests.map((item) => <tr key={item.id}><td>{item.guestName || "WhatsApp guest"}</td><td>{item.eventTitle}</td><td>{item.phone}</td><td>{Number(item.amount).toFixed(2)} {item.currency}</td><td>{item.status}{item.ticketDeliveredAt ? ' · PDF sent' : ''}</td><td>{Number(item.amount) === 0 && ['pending', 'approved'].includes(item.status) && !item.ticketDeliveredAt ? <button className="small-action publish-action" disabled={busyTicket === item.id} onClick={() => approveFreeTicket(item)}>{busyTicket === item.id ? 'Sending…' : item.status === 'pending' ? 'Approve & send PDF' : 'Retry PDF'}</button> : Number(item.amount) > 0 && item.status === 'awaiting_payment' ? 'Awaiting payment' : Number(item.amount) > 0 && item.status === 'paid' ? 'Payment confirmed' : '—'}</td></tr>)}</tbody></table></section>}{priceEvent && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !savingPrice) setPriceEvent(null); }}><section className="modal-card price-modal" role="dialog" aria-modal="true" aria-labelledby="price-modal-title"><div className="modal-header"><div><div className="eyebrow">EVENT PRICING</div><h2 id="price-modal-title">Update ticket price</h2><p>{priceEvent.title}</p></div><button className="icon-button" onClick={() => setPriceEvent(null)} disabled={savingPrice} aria-label="Close"><X size={18} /></button></div><div className="modal-body price-modal-body"><label className="field"><span>Ticket price</span><div className="price-input-wrap"><span>AED</span><input autoFocus type="number" min="0" step="0.01" value={priceValue} onChange={(e) => { setPriceValue(e.target.value); setPriceError(''); }} onKeyDown={(e) => { if (e.key === 'Enter') saveEventPrice(); }} /></div></label><p className="price-help">Set 0.00 for a complimentary ticket. Customers will see this price before requesting a ticket.</p>{priceError && <p className="price-error" role="alert">{priceError}</p>}</div><div className="modal-footer"><button className="button button-secondary" disabled={savingPrice} onClick={() => setPriceEvent(null)}>Cancel</button><button className="button button-primary" disabled={savingPrice} onClick={saveEventPrice}>{savingPrice ? 'Saving…' : 'Save price'}</button></div></section></div>}</>;
 }
 
 export function EventModal({ close, act }) {
-  const [form, setForm] = useState({ title: '', brand: '', venue: '', area: '', date: '', time: '', capacity: 80, ticketPrice: 0, ticketCurrency: 'AED', category: 'Dining', tracks: ['Creators'], dressCode: '', about: '', included: '', whoIsInvited: '', hostNote: '', imageData: '' });
+  const [form, setForm] = useState({ title: '', brand: '', venue: '', area: '', date: '', time: '', capacity: 80, ticketPrice: 0, ticketCurrency: 'AED', category: 'Dining', tracks: ['Creators'], dressCode: '', about: '', included: '', whoIsInvited: '', hostNote: '', imageDataList: [] });
   const [busy, setBusy] = useState(false);
   const [imageError, setImageError] = useState('');
   const set = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
-  const onImage = (file) => {
+  const onImages = async (fileList) => {
     setImageError('');
-    if (!file) { set('imageData', ''); return; }
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setImageError('Choose a JPG, PNG or WebP image.'); return; }
-    if (file.size > 1_500_000) { setImageError('Image must be 1.5 MB or smaller.'); return; }
-    const reader = new FileReader();
-    reader.onload = () => set('imageData', String(reader.result || ''));
-    reader.onerror = () => setImageError('This image could not be read. Please choose another.');
-    reader.readAsDataURL(file);
+    const files = Array.from(fileList || []);
+    if (form.imageDataList.length + files.length > 5) { setImageError('Choose up to 5 event images.'); return; }
+    if (files.some((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) { setImageError('Choose JPG, PNG or WebP images.'); return; }
+    if (files.some((file) => file.size > 400_000) || [...files, ...form.imageDataList.map((data) => ({ size: Math.floor((data.length * 3) / 4) }))].reduce((total, file) => total + file.size, 0) > 1_500_000) {
+      setImageError('Each image must be 400 KB or smaller, with up to 1.5 MB total.');
+      return;
+    }
+    try {
+      const images = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      })));
+      set('imageDataList', [...form.imageDataList, ...images]);
+    } catch { setImageError('An image could not be read. Please choose it again.'); }
   };
   const submit = async (status) => {
     if (!form.title.trim() || !form.brand.trim() || !form.date || imageError) return;
     setBusy(true);
-    await act(() => api.createEvent({ ...form, included: form.included.split(/\n|,/).map((item) => item.trim()).filter(Boolean), status, confirmed: 0 }), status === 'published' ? 'Event created and published' : 'Event saved as draft');
+    await act(() => api.createEvent({ ...form, imageData: form.imageDataList[0] || '', included: form.included.split(/\n|,/).map((item) => item.trim()).filter(Boolean), status, confirmed: 0 }), status === 'published' ? 'Event created and published' : 'Event saved as draft');
     setBusy(false);
     close();
   };
@@ -51,7 +74,7 @@ export function EventModal({ close, act }) {
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}><section className="modal-card"><div className="modal-header"><div><div className="eyebrow">EVENT SETUP</div><h2>Create an event</h2></div><button className="icon-button" onClick={close}><X size={18} /></button></div><div className="modal-body">
     <label className="field"><span>Event title *</span><input autoFocus value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="e.g. Sunset Listening Session" /></label>
     <div className="form-grid"><label className="field"><span>Host brand *</span><input value={form.brand} onChange={(e) => set('brand', e.target.value)} placeholder="Brand name" /></label><label className="field"><span>Category</span><select value={form.category} onChange={(e) => set('category', e.target.value)}>{['Dining', 'Fashion', 'Property', 'Music', 'Art', 'Nightlife', 'Wellness', 'Travel'].map((name) => <option key={name}>{name}</option>)}</select></label><label className="field"><span>Date *</span><input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></label><label className="field"><span>Time</span><input type="time" value={form.time} onChange={(e) => set('time', e.target.value)} /></label><label className="field"><span>Venue</span><input value={form.venue} onChange={(e) => set('venue', e.target.value)} placeholder="Venue" /></label><label className="field"><span>Area</span><input value={form.area} onChange={(e) => set('area', e.target.value)} placeholder="e.g. DIFC" /></label><label className="field"><span>Guest capacity</span><input type="number" min="1" value={form.capacity} onChange={(e) => set('capacity', Number(e.target.value))} /></label><label className="field"><span>Ticket price (AED)</span><input type="number" min="0" step="0.01" value={form.ticketPrice} onChange={(e) => set('ticketPrice', Number(e.target.value))} /></label><label className="field"><span>Dress code</span><input value={form.dressCode} onChange={(e) => set('dressCode', e.target.value)} placeholder="e.g. Smart elegant" /></label></div>
-    <label className="field"><span>Event image (JPG, PNG or WebP ? max 1.5 MB)</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => onImage(e.target.files?.[0])} />{form.imageData ? <img className="event-image-preview" src={form.imageData} alt="Event preview" /> : null}{imageError ? <small className="event-image-error" role="alert">{imageError}</small> : null}</label>
+    <label className="field"><span>Event photos (up to 5 JPG, PNG or WebP images)</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(e) => { onImages(e.target.files); e.target.value = ''; }} /><small className="muted-text">Up to 400 KB per image and 1.5 MB total. The first image is used as the event cover.</small>{form.imageDataList.length > 0 ? <div className="event-image-gallery">{form.imageDataList.map((image, index) => <div className="event-image-tile" key={`${index}-${image.slice(-12)}`}><img src={image} alt={`Event preview ${index + 1}`} /><span>{index === 0 ? 'Cover' : `Photo ${index + 1}`}</span><button type="button" aria-label={`Remove photo ${index + 1}`} onClick={() => set('imageDataList', form.imageDataList.filter((_, imageIndex) => imageIndex !== index))}><X size={14} /></button></div>)}</div> : null}{imageError ? <small className="event-image-error" role="alert">{imageError}</small> : null}</label>
     <label className="field"><span>About this event</span><textarea rows="3" value={form.about} onChange={(e) => set('about', e.target.value)} placeholder="Describe the event" /></label>
     <label className="field"><span>What is included (one item per line or comma separated)</span><textarea rows="2" value={form.included} onChange={(e) => set('included', e.target.value)} placeholder="Welcome drink, tasting menu" /></label>
     <label className="field"><span>Who is invited</span><textarea rows="2" value={form.whoIsInvited} onChange={(e) => set('whoIsInvited', e.target.value)} placeholder="Guest eligibility" /></label>
