@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS ticket_requests (
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'awaiting_payment', 'paid', 'rejected')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS stripe_session_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_token TEXT UNIQUE;
+ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_delivered_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,

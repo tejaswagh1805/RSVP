@@ -4,7 +4,7 @@ import cors from "cors";
 import { neon } from "@neondatabase/serverless";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   sendInvitationEmail,
   sendInvitationWhatsApp,
@@ -18,6 +18,7 @@ import {
   setSessionCookie,
   verifyPassword,
 } from "./auth.js";
+import { createTicketPdf } from "./ticket-pdf.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -74,7 +75,12 @@ const demoAdmins = sql
     );
 
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
-app.use(express.json({ limit: "3mb" }));
+app.use(express.json({
+  limit: "3mb",
+  verify(req, _res, buffer) {
+    if (req.originalUrl === "/api/payments/stripe/webhook") req.rawBody = Buffer.from(buffer);
+  },
+}));
 
 async function currentAdmin(req) {
   const token = getSessionToken(req);
@@ -491,9 +497,102 @@ async function sendInfobipWhatsApp(to, textMessage, events = []) {
   if (!response.ok) throw new Error(`Infobip WhatsApp returned HTTP ${response.status}`);
 }
 
+async function sendInfobipTicket(to, pdfUrl, filename, caption) {
+  const base = String(process.env.INFOBIP_BASE_URL || "").trim().replace(/\/$/, "");
+  const apiKey = String(process.env.INFOBIP_API_KEY || "").trim();
+  const sender = String(process.env.INFOBIP_WHATSAPP_SENDER || "").trim();
+  if (!base || !apiKey || !sender) throw new Error("Infobip WhatsApp is not configured.");
+  const response = await fetch(`${base}/whatsapp/1/message/document`, {
+    method: "POST",
+    headers: { Authorization: `App ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ from: sender, to, content: { mediaUrl: pdfUrl, caption, filename } }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`Infobip document send returned HTTP ${response.status}: ${await response.text()}`);
+}
+
+async function createStripeCheckout({ requestId, event, amount, currency }) {
+  const secret = String(process.env.STRIPE_SECRET_KEY || "").trim();
+  if (!secret) throw new Error("Stripe is not configured.");
+  const site = String(process.env.PUBLIC_SITE_URL || "https://rsvp-dxb-customer.onrender.com").replace(/\/$/, "");
+  const cents = Math.round(Number(amount) * 100);
+  if (!Number.isFinite(cents) || cents <= 0) throw new Error("Ticket price must be greater than zero to take payment.");
+  const form = new URLSearchParams({
+    mode: "payment",
+    success_url: `${site}/events/${encodeURIComponent(event.id)}?payment=success`,
+    cancel_url: `${site}/events/${encodeURIComponent(event.id)}?payment=cancelled`,
+    client_reference_id: requestId,
+    "metadata[ticket_request_id]": requestId,
+    "line_items[0][quantity]": "1",
+    "line_items[0][price_data][currency]": String(currency).toLowerCase(),
+    "line_items[0][price_data][unit_amount]": String(cents),
+    "line_items[0][price_data][product_data][name]": `RSVP DXB ticket: ${event.title}`,
+    "line_items[0][price_data][product_data][description]": `${event.date}${event.venue ? ` · ${event.venue}` : ""}`,
+  });
+  const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body: form,
+    signal: AbortSignal.timeout(15000),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || `Stripe returned HTTP ${response.status}`);
+  return data;
+}
+
+function verifyStripeSignature(req) {
+  const secret = String(process.env.STRIPE_WEBHOOK_SECRET || "").trim();
+  const header = req.get("stripe-signature") || "";
+  if (!secret || !req.rawBody) return false;
+  const parts = Object.fromEntries(header.split(",").map((part) => {
+    const [key, ...value] = part.split("=");
+    return [key, value.join("=")];
+  }));
+  const timestamp = Number(parts.t);
+  if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > 300 || !parts.v1) return false;
+  const expected = createHmac("sha256", secret).update(`${timestamp}.${req.rawBody}`).digest();
+  const received = Buffer.from(parts.v1, "hex");
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
 app.get("/api/health", (_req, res) =>
   res.json({ ok: true, database: Boolean(sql) }),
 );
+app.get("/api/tickets/:token.pdf", async (req, res, next) => {
+  try {
+    if (!sql) return res.status(404).json({ error: "Ticket not found." });
+    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, e.title AS "eventTitle", e.date::text AS date, e.time, e.venue FROM ticket_requests r JOIN events e ON e.id = r.event_id WHERE r.ticket_token = ${req.params.token} AND r.status = 'paid' LIMIT 1`;
+    if (!rows[0]) return res.status(404).json({ error: "Ticket not found." });
+    const pdf = createTicketPdf(rows[0]);
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="RSVP-DXB-${rows[0].id}.pdf"`, "Cache-Control": "private, no-store" });
+    res.send(pdf);
+  } catch (error) { next(error); }
+});
+app.post("/api/payments/stripe/webhook", async (req, res) => {
+  if (!verifyStripeSignature(req)) return res.status(400).send("Invalid Stripe signature.");
+  const event = req.body;
+  if (!["checkout.session.completed", "checkout.session.async_payment_succeeded"].includes(event?.type)) return res.sendStatus(200);
+  const session = event.data?.object;
+  if (session?.payment_status !== "paid") return res.sendStatus(200);
+  try {
+    if (!sql) throw new Error("Database is not configured.");
+    const requestId = String(session.metadata?.ticket_request_id || session.client_reference_id || "");
+    if (!requestId) throw new Error("Stripe session has no ticket request metadata.");
+    const token = randomBytes(24).toString("hex");
+    const rows = await sql`UPDATE ticket_requests r SET status = 'paid', stripe_session_id = ${session.id}, paid_at = COALESCE(r.paid_at, NOW()), ticket_token = COALESCE(r.ticket_token, ${token}) FROM events e WHERE r.id = ${requestId} AND r.event_id = e.id AND r.status IN ('awaiting_payment', 'paid') AND r.stripe_session_id = ${session.id} AND r.amount = ${Number(session.amount_total || 0) / 100} AND lower(r.currency) = lower(${session.currency || ''}) RETURNING r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.ticket_token AS "ticketToken", r.ticket_delivered_at AS "ticketDeliveredAt", e.title AS "eventTitle", e.date::text AS date, e.time, e.venue`;
+    const ticket = rows[0];
+    if (!ticket) throw new Error("No matching ticket request for the paid Stripe Checkout session.");
+    if (ticket.ticketDeliveredAt) return res.sendStatus(200);
+    const host = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+    const pdfUrl = `${host}/api/tickets/${ticket.ticketToken}.pdf`;
+    await sendInfobipTicket(ticket.phone, pdfUrl, `RSVP-DXB-${ticket.id}.pdf`, `Payment received for ${ticket.eventTitle}. Your ticket is attached.`);
+    await sql`UPDATE ticket_requests SET ticket_delivered_at = NOW() WHERE id = ${ticket.id}`;
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Stripe ticket fulfillment failed:", error?.message || error);
+    res.status(500).send("Ticket fulfillment will be retried.");
+  }
+});
 app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
   try {
     const secret = String(process.env.INFOBIP_WEBHOOK_SECRET || "").trim();
@@ -505,7 +604,7 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
       if (item.integrationType !== "WHATSAPP") continue;
       const phone = String(item.from || "").replace(/\D/g, "");
       const message = item.message || {};
-      const input = String(message.text || message.interactive?.listReply?.id || message.button?.payload || "").trim();
+      const input = String(message.text || message.interactive?.listReply?.id || message.interactive?.listReply?.title || message.button?.payload || message.button?.text || "").trim();
       if (!phone || !input) continue;
       const directEventMatch = input.match(/^rsvpdxb\s+event\s+(.+)$/i);
       if (!directEventMatch && /^(rsvpdxb(?:\s+events?)?|hi|hello|start|events|ticket|request)$/i.test(input)) {
@@ -517,16 +616,36 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         continue;
       }
       const selectedEventId = directEventMatch ? directEventMatch[1].trim() : input;
+      const selectedEventTitle = directEventMatch
+        ? ""
+        : input.split(/\r?\n/)[0].replace(/\s+\d{4}-\d{2}-\d{2}.*$/, "").trim();
       const event = sql
-        ? (await sql`SELECT id, title, date::text AS date, time, venue, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE id = ${selectedEventId} AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
-        : demo.events.find((row) => row.id === selectedEventId && row.status === "published" && row.date >= new Date().toISOString().slice(0, 10));
+        ? (await sql`SELECT id, title, date::text AS date, time, venue, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE (id = ${selectedEventId} OR lower(title) = lower(${selectedEventTitle})) AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
+        : demo.events.find((row) => (row.id === selectedEventId || row.title.toLowerCase() === selectedEventTitle.toLowerCase()) && row.status === "published" && row.date >= new Date().toISOString().slice(0, 10));
       if (!event) {
         await sendInfobipWhatsApp(phone, "Please send “events” to see the current list, then select an event.");
         continue;
       }
-      const id = `ticket-${text(item.messageId, 100) || crypto.randomUUID()}`;
-      if (sql) await sql`INSERT INTO ticket_requests (id, event_id, phone, guest_name, amount, currency) VALUES (${id}, ${event.id}, ${phone}, ${text(item.contact?.name, 120)}, ${Number(event.ticketPrice || 0)}, ${event.ticketCurrency || "AED"}) ON CONFLICT (id) DO NOTHING`;
-      await sendInfobipWhatsApp(phone, `Your request is received for ${event.title}. Ticket price: ${event.ticketPrice || 0} ${event.ticketCurrency || "AED"}. Our team will confirm your request and share the secure payment link shortly.`);
+      const id = `ticket-${text(item.messageId, 100) || randomBytes(12).toString("hex")}`;
+      const amount = Number(event.ticketPrice || 0);
+      const currency = event.ticketCurrency || "AED";
+      if (!sql) {
+        await sendInfobipWhatsApp(phone, `We received your request for ${event.title}. Payment checkout is available after the RSVP API is connected to Neon and Stripe.`);
+        continue;
+      }
+      await sql`INSERT INTO ticket_requests (id, event_id, phone, guest_name, amount, currency) VALUES (${id}, ${event.id}, ${phone}, ${text(item.contact?.name, 120)}, ${amount}, ${currency}) ON CONFLICT (id) DO NOTHING`;
+      if (amount <= 0) {
+        await sendInfobipWhatsApp(phone, `Your request for ${event.title} is received. This event is currently free; the team will confirm your ticket.`);
+        continue;
+      }
+      try {
+        const checkout = await createStripeCheckout({ requestId: id, event, amount, currency });
+        await sql`UPDATE ticket_requests SET status = 'awaiting_payment', stripe_session_id = ${checkout.id} WHERE id = ${id} AND status = 'pending'`;
+        await sendInfobipWhatsApp(phone, `Complete secure payment for ${event.title} (${amount.toFixed(2)} ${currency}) using this link. After payment, your PDF ticket will be sent here: ${checkout.url}`);
+      } catch (error) {
+        console.error("Stripe Checkout creation failed:", error?.message || error);
+        await sendInfobipWhatsApp(phone, `Your request for ${event.title} is saved, but checkout could not be started. Please contact the RSVP DXB team.`);
+      }
     }
   } catch (error) {
     if (!res.headersSent) next(error);
@@ -537,7 +656,7 @@ app.get("/api/ticket-requests", async (req, res, next) => {
   try {
     if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to view ticket requests." });
     if (!sql) return res.json([]);
-    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status, r.created_at AS "createdAt", e.id AS "eventId", e.title AS "eventTitle" FROM ticket_requests r JOIN events e ON e.id = r.event_id ORDER BY r.created_at DESC`;
+    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status, r.paid_at AS "paidAt", r.ticket_delivered_at AS "ticketDeliveredAt", r.created_at AS "createdAt", e.id AS "eventId", e.title AS "eventTitle" FROM ticket_requests r JOIN events e ON e.id = r.event_id ORDER BY r.created_at DESC`;
     res.json(rows);
   } catch (error) { next(error); }
 });
