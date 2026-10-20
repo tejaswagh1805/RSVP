@@ -501,6 +501,39 @@ async function sendInfobipWhatsApp(to, textMessage, events = []) {
   if (!response.ok) throw new Error(`Infobip WhatsApp returned HTTP ${response.status}`);
 }
 
+async function sendInfobipWhatsAppPayment(to, checkoutUrl, event, guestName, amount, currency) {
+  const base = String(process.env.INFOBIP_BASE_URL || "").trim().replace(/\/$/, "");
+  const apiKey = String(process.env.INFOBIP_API_KEY || "").trim();
+  const sender = String(process.env.INFOBIP_WHATSAPP_SENDER || "").trim();
+  if (!base || !apiKey || !sender) throw new Error("Infobip WhatsApp is not configured.");
+
+  const details = [
+    `Event: ${event.title}`,
+    `Date: ${event.date}${event.time ? ` · ${event.time}` : ""}`,
+    event.venue ? `Venue: ${event.venue}` : "",
+    guestName ? `Guest: ${guestName}` : "",
+    `Total: ${Number(amount).toFixed(2)} ${currency}`,
+    "\nTap Pay now to complete secure payment. Your PDF ticket will be sent to this chat after payment is confirmed.",
+  ].filter(Boolean).join("\n");
+
+  const response = await fetch(`${base}/whatsapp/1/message/interactive/url-button`, {
+    method: "POST",
+    headers: { Authorization: `App ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      from: sender,
+      to,
+      content: {
+        header: { type: "TEXT", text: "RSVP DXB · Ticket checkout" },
+        body: { text: details },
+        footer: { text: "Secure checkout powered by Stripe" },
+        action: { title: "Pay now", url: checkoutUrl },
+      },
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error(`Infobip payment button returned HTTP ${response.status}: ${await response.text()}`);
+}
+
 async function sendInfobipTicket(to, pdfUrl, filename, caption) {
   const base = String(process.env.INFOBIP_BASE_URL || "").trim().replace(/\/$/, "");
   const apiKey = String(process.env.INFOBIP_API_KEY || "").trim();
@@ -645,7 +678,22 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
       try {
         const checkout = await createStripeCheckout({ requestId: id, event, amount, currency });
         await sql`UPDATE ticket_requests SET status = 'awaiting_payment', stripe_session_id = ${checkout.id} WHERE id = ${id} AND status = 'pending'`;
-        await sendInfobipWhatsApp(phone, `Complete secure payment for ${event.title} (${amount.toFixed(2)} ${currency}) using this link. After payment, your PDF ticket will be sent here: ${checkout.url}`);
+        const guestName = text(item.contact?.name, 120);
+        try {
+          await sendInfobipWhatsAppPayment(phone, checkout.url, event, guestName, amount, currency);
+        } catch (error) {
+          console.error("Infobip payment button send failed:", error?.message || error);
+          const details = [
+            `Ticket checkout: ${event.title}`,
+            `Date: ${event.date}${event.time ? ` · ${event.time}` : ""}`,
+            event.venue ? `Venue: ${event.venue}` : "",
+            guestName ? `Guest: ${guestName}` : "",
+            `Total: ${amount.toFixed(2)} ${currency}`,
+            `Pay securely: ${checkout.url}`,
+            "Your PDF ticket will be sent here after payment is confirmed.",
+          ].filter(Boolean).join("\n");
+          await sendInfobipWhatsApp(phone, details);
+        }
       } catch (error) {
         console.error("Stripe Checkout creation failed:", error?.message || error);
         await sendInfobipWhatsApp(phone, `Your request for ${event.title} is saved, but checkout could not be started. Please contact the RSVP DXB team.`);
