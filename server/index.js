@@ -682,9 +682,10 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         else await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB! Choose an event to request your ticket:", events);
         continue;
       }
-      const selectedEventId = directEventMatch ? directEventMatch[1].trim() : input;
+      const directEventValue = directEventMatch?.[1].trim() || "";
+      const selectedEventId = directEventMatch ? directEventValue : input;
       const selectedEventTitle = directEventMatch
-        ? ""
+        ? directEventValue
         : input.split(/\r?\n/)[0].replace(/\s+\d{4}-\d{2}-\d{2}.*$/, "").trim();
       const event = sql
         ? (await sql`SELECT id, title, date::text AS date, time, venue, image_data AS "imageData", ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE (id = ${selectedEventId} OR lower(title) = lower(${selectedEventTitle})) AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
