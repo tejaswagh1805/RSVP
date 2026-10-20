@@ -458,7 +458,11 @@ const selectFor = {
   clients:
     "SELECT id, name, package, credits, events, status FROM clients ORDER BY name",
   guests:
-    'SELECT id, name, track, event_id AS "eventId", plus_ones AS "plusOnes", code, checked_in_at AS "checkedInAt", status FROM guests ORDER BY name',
+    `SELECT id, name, track, event_id AS "eventId", plus_ones AS "plusOnes", code, checked_in_at AS "checkedInAt", status FROM guests
+     UNION ALL
+     SELECT 'ticket-' || r.id AS id, COALESCE(NULLIF(r.guest_name, ''), 'WhatsApp guest') AS name, 'Ticket' AS track, r.event_id AS "eventId", 0 AS "plusOnes", r.ticket_token AS code, r.checked_in_at::text AS "checkedInAt", r.status
+     FROM ticket_requests r WHERE r.ticket_token IS NOT NULL AND r.status IN ('approved', 'paid')
+     ORDER BY name`,
 };
 const getRows = async (table) => {
   if (sql) return sql.query(selectFor[table]);
@@ -561,7 +565,7 @@ app.get("/api/health", (_req, res) =>
 app.get("/api/tickets/:token.pdf", async (req, res, next) => {
   try {
     if (!sql) return res.status(404).json({ error: "Ticket not found." });
-    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, e.title AS "eventTitle", e.date::text AS date, e.time, e.venue FROM ticket_requests r JOIN events e ON e.id = r.event_id WHERE r.ticket_token = ${req.params.token} AND r.status IN ('paid', 'approved') LIMIT 1`;
+    const rows = await sql`SELECT r.id, r.ticket_token AS "ticketToken", r.phone, r.guest_name AS "guestName", r.amount, r.currency, e.title AS "eventTitle", e.date::text AS date, e.time, e.venue FROM ticket_requests r JOIN events e ON e.id = r.event_id WHERE r.ticket_token = ${req.params.token} AND r.status IN ('paid', 'approved') LIMIT 1`;
     if (!rows[0]) return res.status(404).json({ error: "Ticket not found." });
     const pdf = createTicketPdf(rows[0]);
     res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="RSVP-DXB-${rows[0].id}.pdf"`, "Cache-Control": "private, no-store" });
@@ -656,7 +660,7 @@ app.get("/api/ticket-requests", async (req, res, next) => {
   try {
     if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to view ticket requests." });
     if (!sql) return res.json([]);
-    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status, r.paid_at AS "paidAt", r.ticket_delivered_at AS "ticketDeliveredAt", r.created_at AS "createdAt", e.id AS "eventId", e.title AS "eventTitle" FROM ticket_requests r JOIN events e ON e.id = r.event_id ORDER BY r.created_at DESC`;
+    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status, r.paid_at AS "paidAt", r.ticket_delivered_at AS "ticketDeliveredAt", r.checked_in_at AS "checkedInAt", r.created_at AS "createdAt", e.id AS "eventId", e.title AS "eventTitle" FROM ticket_requests r JOIN events e ON e.id = r.event_id ORDER BY r.created_at DESC`;
     res.json(rows);
   } catch (error) { next(error); }
 });
@@ -1326,6 +1330,20 @@ app.post("/api/door/scan", async (req, res, next) => {
       .trim()
       .toUpperCase();
     if (!code) return res.status(400).json({ error: "Enter an RSVP code." });
+    const eventId = text(req.body.eventId, 180);
+    if (/^[A-F0-9]{48}$/.test(code) && sql) {
+      const checkedIn = await sql`UPDATE ticket_requests SET checked_in_at = NOW() WHERE upper(ticket_token) = ${code} AND status IN ('approved', 'paid') AND checked_in_at IS NULL AND (${eventId} = '' OR event_id = ${eventId}) RETURNING id, guest_name AS "guestName", checked_in_at AS "checkedInAt"`;
+      if (checkedIn[0]) {
+        const name = checkedIn[0].guestName || "WhatsApp guest";
+        return res.json({ tone: "green", title: `Welcome ${name.split(" ")[0]}`, detail: "Ticket validated · entry recorded" });
+      }
+      const existingTicket = (await sql`SELECT guest_name AS "guestName", checked_in_at AS "checkedInAt", status FROM ticket_requests WHERE upper(ticket_token) = ${code} AND (${eventId} = '' OR event_id = ${eventId}) LIMIT 1`)[0];
+      if (existingTicket?.checkedInAt) return res.json({ tone: "amber", title: "Already scanned", detail: `${existingTicket.guestName || "Guest"} has already checked in.` });
+      if (existingTicket && !["approved", "paid"].includes(existingTicket.status)) return res.json({ tone: "red", title: "Ticket not valid", detail: "This ticket has not been approved or paid." });
+      if (existingTicket) return res.json({ tone: "red", title: "Wrong event", detail: "This ticket belongs to a different event." });
+      const ticketForAnotherEvent = eventId ? (await sql`SELECT id FROM ticket_requests WHERE upper(ticket_token) = ${code} LIMIT 1`)[0] : null;
+      if (ticketForAnotherEvent) return res.json({ tone: "red", title: "Wrong event", detail: "This ticket belongs to a different event." });
+    }
     let guest;
     let justCheckedIn = false;
     if (!sql)

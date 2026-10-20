@@ -130,12 +130,14 @@ CREATE TABLE IF NOT EXISTS ticket_requests (
   amount NUMERIC(10,2) NOT NULL,
   currency TEXT NOT NULL DEFAULT 'AED',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'awaiting_payment', 'paid', 'rejected')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  checked_in_at TIMESTAMPTZ
 );
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS stripe_session_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_token TEXT UNIQUE;
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_delivered_at TIMESTAMPTZ;
+ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ;
 ALTER TABLE ticket_requests DROP CONSTRAINT IF EXISTS ticket_requests_status_check;
 ALTER TABLE ticket_requests ADD CONSTRAINT ticket_requests_status_check CHECK (status IN ('pending', 'awaiting_payment', 'approved', 'paid', 'rejected'));
 
