@@ -8,9 +8,9 @@ Admin only dashboard for applications, members, events, guest invitations, wall 
 - Node.js and Express API
 - Neon Postgres persistence through `@neondatabase/serverless`
 
-The server starts with local demonstration data when `DATABASE_URL` is not set. That mode is useful for exploring the dashboard; changes reset when the server restarts. The two local demo accounts are `tejas@rsvpdxb.local` and `admin@rsvpdxb.local`, both with password `demo1234`.
+The server starts with local demonstration data when `DATABASE_URL` is not set. That mode is useful for exploring the dashboard; changes reset when the server restarts. The local demo account is `tejas@rsvpdxb.local` with password `demo1234`.
 
-To use Neon, copy `.env.example` to `.env`, set `DATABASE_URL` and the names, emails, and unique passwords for both admin accounts, then run the database setup command once. Use passwords of at least 12 characters:
+To use Neon, copy `.env.example` to `.env`, set `DATABASE_URL` and the single admin name, email, and private password, then run the database setup command once. Use a password of at least 12 characters:
 
 ```powershell
 Copy-Item .env.example .env

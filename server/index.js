@@ -67,15 +67,6 @@ const demoAdmins = sql
           password: process.env.ADMIN_1_PASSWORD || "demo1234",
           role: "Owner",
         },
-        {
-          id: "admin-2",
-          name: process.env.ADMIN_2_NAME || "RSVP DXB Admin",
-          email: (
-            process.env.ADMIN_2_EMAIL || "admin@rsvpdxb.local"
-          ).toLowerCase(),
-          password: process.env.ADMIN_2_PASSWORD || "demo1234",
-          role: "Admin",
-        },
       ].map(async (admin) => ({
         ...admin,
         passwordHash: await hashPassword(admin.password),
@@ -516,7 +507,8 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
       const message = item.message || {};
       const input = String(message.text || message.interactive?.listReply?.id || message.button?.payload || "").trim();
       if (!phone || !input) continue;
-      if (/^(rsvpdxb\b.*|hi|hello|start|events|ticket|request)$/i.test(input)) {
+      const directEventMatch = input.match(/^rsvpdxb\s+event\s+(.+)$/i);
+      if (!directEventMatch && /^(rsvpdxb(?:\s+events?)?|hi|hello|start|events|ticket|request)$/i.test(input)) {
         const events = sql
           ? await sql`SELECT id, title, date::text AS date, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency" FROM events WHERE status = 'published' AND date >= CURRENT_DATE ORDER BY date LIMIT 10`
           : demo.events.filter((event) => event.status === "published").map((event) => ({ ...event, ticketPrice: event.ticketPrice || 0, ticketCurrency: "AED" })).slice(0, 10);
@@ -524,9 +516,10 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         else await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB! Choose an event to request your ticket:", events);
         continue;
       }
+      const selectedEventId = directEventMatch ? directEventMatch[1].trim() : input;
       const event = sql
-        ? (await sql`SELECT id, title, date::text AS date, time, venue, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE id = ${input} AND status = 'published' LIMIT 1`)[0]
-        : demo.events.find((row) => row.id === input && row.status === "published");
+        ? (await sql`SELECT id, title, date::text AS date, time, venue, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE id = ${selectedEventId} AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
+        : demo.events.find((row) => row.id === selectedEventId && row.status === "published" && row.date >= new Date().toISOString().slice(0, 10));
       if (!event) {
         await sendInfobipWhatsApp(phone, "Please send “events” to see the current list, then select an event.");
         continue;

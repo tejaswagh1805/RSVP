@@ -11,17 +11,15 @@ if (!databaseUrl || /USER:PASSWORD|@HOST\/DBNAME/i.test(databaseUrl)) {
   process.exit(1);
 }
 
-const admins = [1, 2].map((number) => ({
-  id: `admin-${number}`,
-  name: process.env[`ADMIN_${number}_NAME`]?.trim(),
-  email: process.env[`ADMIN_${number}_EMAIL`]?.trim().toLowerCase(),
-  password: process.env[`ADMIN_${number}_PASSWORD`],
-  role: number === 1 ? 'Owner' : 'Admin',
-}));
-const passwordsAreDistinct = new Set(admins.map((admin) => admin.password)).size === admins.length;
-const emailsAreDistinct = new Set(admins.map((admin) => admin.email)).size === admins.length;
-if (admins.some((admin) => !admin.name || !admin.email || !admin.password || admin.password.length < 12 || /replace-this|change-me|your-password/i.test(admin.password)) || !passwordsAreDistinct || !emailsAreDistinct) {
-  console.error('Set both admin names, distinct emails, and distinct real passwords (at least 12 characters) in .env. Replace the example passwords before running setup.');
+const admin = {
+  id: 'admin-1',
+  name: process.env.ADMIN_1_NAME?.trim(),
+  email: process.env.ADMIN_1_EMAIL?.trim().toLowerCase(),
+  password: process.env.ADMIN_1_PASSWORD,
+  role: 'Owner',
+};
+if (!admin.name || !admin.email || !admin.password || admin.password.length < 12 || /replace-this|change-me|your-password/i.test(admin.password)) {
+  console.error('Set ADMIN_1_NAME, ADMIN_1_EMAIL, and a private ADMIN_1_PASSWORD of at least 12 characters in .env. Replace the example values before running setup.');
   process.exit(1);
 }
 
@@ -35,8 +33,6 @@ const seed = await readFile(path.join(root, 'server/seed.sql'), 'utf8');
 for (const statement of seed.split(';').map((value) => value.trim()).filter(Boolean)) {
   await sql.query(statement);
 }
-for (const admin of admins) {
-  const passwordHash = await hashPassword(admin.password);
-  await sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`;
-}
-console.log('Neon schema, prototype records, and both admin accounts are ready.');
+const passwordHash = await hashPassword(admin.password);
+await sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`;
+console.log('Neon schema, prototype records, and the admin account are ready.');
