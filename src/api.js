@@ -22,6 +22,7 @@ export const api = {
   register: (member) => request('/register', { method: 'POST', body: JSON.stringify(member) }),
   dashboard: () => request('/dashboard'),
   list: (resource) => request(`/${resource}`),
+  ticketRequests: () => request('/ticket-requests'),
   decideApplication: (id, status) => request(`/applications/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   createEvent: (event) => request('/events', { method: 'POST', body: JSON.stringify(event) }),
   updateEvent: (id, status) => request(`/events/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),

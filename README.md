@@ -37,6 +37,16 @@ Creating an invitation submits an email through Amazon SES and a WhatsApp templa
 
 Provider acceptance does not guarantee inbox delivery or WhatsApp delivery. The invitation result reports each channel separately. If a provider is not configured or rejects a request, the page offers an email draft or WhatsApp link for manual sending. Keep provider secrets in the private `.env` file and never commit them.
 
+## Infobip ticket request chatbot
+
+The customer event cards can open a WhatsApp chat with a prefilled request. Set `VITE_RSVP_WHATSAPP_NUMBER` in the customer app's build environment to your Infobip WhatsApp sender number in international digits. The Express webhook at `/api/whatsapp/infobip/webhook` greets the user, lists up to ten published events, records the selected event and price in `ticket_requests`, and shows those requests on the admin Event programme page. Set `INFOBIP_BASE_URL` (the API host shown in Infobip, without a trailing slash), `INFOBIP_API_KEY`, `INFOBIP_WHATSAPP_SENDER`, and a long random `INFOBIP_WEBHOOK_SECRET`. Configure the Infobip inbound-message webhook to POST to `https://YOUR-RENDER-HOST/api/whatsapp/infobip/webhook` with `Authorization: Bearer YOUR_INFOBIP_WEBHOOK_SECRET`. Run `npm run db:setup` once after deploying schema changes. Set event ticket prices in AED in the Create event form.
+
+Staging Render services shown for this setup are the API/dashboard at `https://rsvp-cytl.onrender.com` and customer app at `https://rsvp-dxb-customer.onrender.com`. In the existing `RSVP` service settings, set the variables from this project's `.env.example`, including `CLIENT_ORIGIN` and `PUBLIC_SITE_URL` pointing to the customer service. Apply the database schema once with `npm run db:setup` from this project using the same `DATABASE_URL`. In the existing `RSVP-DXB_customer` service, set `VITE_RSVP_WHATSAPP_NUMBER` to the Infobip sender's international phone number (digits only), then redeploy so Vite embeds it in the site. Configure the Infobip inbound webhook to use the API URL above.
+
+The Render breadcrumb in the supplied screenshot says `Production`; `APP_ENV=staging` is only an app label and does not create an isolated Render staging environment. These free services can be used for testing, but they are the services currently marked Production in Render.
+
+This first integration records and displays requests; it does not collect payment, verify settlement, or deliver ticket PDFs. Those steps require connecting a payment provider and its signing secret before paid tickets can safely be issued.
+
 ## Existing members and new registrations
 
 The member application page is available at `/register`. It saves submissions in `applications` as pending review. Passwords are stored as scrypt hashes, never as plaintext. Approving an application creates the member directory row and transfers the password hash. Customer login is not part of this admin dashboard yet.

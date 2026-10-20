@@ -455,7 +455,7 @@ const selectFor = {
   members:
     'SELECT id, name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
   events:
-    'SELECT id, title, brand, venue, date::text AS date, time, area, category, tracks, capacity, confirmed, dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", status FROM events ORDER BY date',
+    'SELECT id, title, brand, venue, date::text AS date, time, area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", status FROM events ORDER BY date',
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   clients:
@@ -471,9 +471,83 @@ const getRows = async (table) => {
     : rows;
 };
 
+async function sendInfobipWhatsApp(to, textMessage, events = []) {
+  const base = String(process.env.INFOBIP_BASE_URL || "").trim().replace(/\/$/, "");
+  const apiKey = String(process.env.INFOBIP_API_KEY || "").trim();
+  const sender = String(process.env.INFOBIP_WHATSAPP_SENDER || "").trim();
+  if (!base || !apiKey || !sender) return;
+  const payload = events.length
+    ? {
+        from: sender,
+        to,
+        content: {
+          body: { text: textMessage },
+          action: {
+            title: "View events",
+            sections: [{ rows: events.slice(0, 10).map((event) => ({
+              id: event.id,
+              title: event.title.slice(0, 24),
+              description: `${event.date} · ${event.ticketPrice} ${event.ticketCurrency}`.slice(0, 72),
+            })) }],
+          },
+        },
+      }
+    : { from: sender, to, content: { text: textMessage } };
+  const response = await fetch(`${base}/whatsapp/1/message/${events.length ? "interactive/list" : "text"}`, {
+    method: "POST", headers: { Authorization: `App ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error(`Infobip WhatsApp returned HTTP ${response.status}`);
+}
+
 app.get("/api/health", (_req, res) =>
   res.json({ ok: true, database: Boolean(sql) }),
 );
+app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
+  try {
+    const secret = String(process.env.INFOBIP_WEBHOOK_SECRET || "").trim();
+    if (!secret || req.get("authorization") !== `Bearer ${secret}`)
+      return res.status(401).json({ error: "Unauthorized webhook." });
+    res.sendStatus(200);
+    const inbound = Array.isArray(req.body.results) ? req.body.results : [];
+    for (const item of inbound) {
+      if (item.integrationType !== "WHATSAPP") continue;
+      const phone = String(item.from || "").replace(/\D/g, "");
+      const message = item.message || {};
+      const input = String(message.text || message.interactive?.listReply?.id || message.button?.payload || "").trim();
+      if (!phone || !input) continue;
+      if (/^(rsvpdxb\b.*|hi|hello|start|events|ticket|request)$/i.test(input)) {
+        const events = sql
+          ? await sql`SELECT id, title, date::text AS date, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency" FROM events WHERE status = 'published' AND date >= CURRENT_DATE ORDER BY date LIMIT 10`
+          : demo.events.filter((event) => event.status === "published").map((event) => ({ ...event, ticketPrice: event.ticketPrice || 0, ticketCurrency: "AED" })).slice(0, 10);
+        if (!events.length) await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB. There are no events open for ticket requests right now.");
+        else await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB! Choose an event to request your ticket:", events);
+        continue;
+      }
+      const event = sql
+        ? (await sql`SELECT id, title, date::text AS date, time, venue, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE id = ${input} AND status = 'published' LIMIT 1`)[0]
+        : demo.events.find((row) => row.id === input && row.status === "published");
+      if (!event) {
+        await sendInfobipWhatsApp(phone, "Please send “events” to see the current list, then select an event.");
+        continue;
+      }
+      const id = `ticket-${text(item.messageId, 100) || crypto.randomUUID()}`;
+      if (sql) await sql`INSERT INTO ticket_requests (id, event_id, phone, guest_name, amount, currency) VALUES (${id}, ${event.id}, ${phone}, ${text(item.contact?.name, 120)}, ${Number(event.ticketPrice || 0)}, ${event.ticketCurrency || "AED"}) ON CONFLICT (id) DO NOTHING`;
+      await sendInfobipWhatsApp(phone, `Your request is received for ${event.title}. Ticket price: ${event.ticketPrice || 0} ${event.ticketCurrency || "AED"}. Our team will confirm your request and share the secure payment link shortly.`);
+    }
+  } catch (error) {
+    if (!res.headersSent) next(error);
+    else console.error("Infobip webhook processing failed:", error?.message || error);
+  }
+});
+app.get("/api/ticket-requests", async (req, res, next) => {
+  try {
+    if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to view ticket requests." });
+    if (!sql) return res.json([]);
+    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status, r.created_at AS "createdAt", e.id AS "eventId", e.title AS "eventTitle" FROM ticket_requests r JOIN events e ON e.id = r.event_id ORDER BY r.created_at DESC`;
+    res.json(rows);
+  } catch (error) { next(error); }
+});
 app.get("/api/auth/me", async (req, res, next) => {
   try {
     res.json({ admin: await currentAdmin(req), demoMode: !sql });
@@ -949,6 +1023,8 @@ app.post("/api/events", async (req, res, next) => {
     const time = text(req.body.time, 40);
     const category = text(req.body.category, 80) || "Dining";
     const capacity = Number(req.body.capacity || 80);
+    const ticketPrice = Number(req.body.ticketPrice || 0);
+    const ticketCurrency = text(req.body.ticketCurrency, 3).toUpperCase() || "AED";
     const status = String(req.body.status || "draft");
     const allowedTracks = [
       "Media",
@@ -984,6 +1060,8 @@ app.post("/api/events", async (req, res, next) => {
       return res
         .status(400)
         .json({ error: "Enter a guest capacity above zero." });
+    if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency))
+      return res.status(400).json({ error: "Enter a valid ticket price and three-letter currency." });
     if (!["draft", "published", "pending", "closed"].includes(status))
       return res.status(400).json({ error: "Invalid event status." });
     if (
@@ -1007,6 +1085,8 @@ app.post("/api/events", async (req, res, next) => {
       time,
       capacity,
       confirmed: 0,
+      ticketPrice,
+      ticketCurrency,
       category,
       tracks,
       dressCode,
@@ -1019,7 +1099,7 @@ app.post("/api/events", async (req, res, next) => {
     };
     if (!sql) demo.events.unshift(event);
     else
-      await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${status})`;
+      await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, ticket_price, ticket_currency, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${status})`;
     res.status(201).json(event);
   } catch (error) {
     next(error);
