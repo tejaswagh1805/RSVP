@@ -561,7 +561,7 @@ app.get("/api/health", (_req, res) =>
 app.get("/api/tickets/:token.pdf", async (req, res, next) => {
   try {
     if (!sql) return res.status(404).json({ error: "Ticket not found." });
-    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, e.title AS "eventTitle", e.date::text AS date, e.time, e.venue FROM ticket_requests r JOIN events e ON e.id = r.event_id WHERE r.ticket_token = ${req.params.token} AND r.status = 'paid' LIMIT 1`;
+    const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, e.title AS "eventTitle", e.date::text AS date, e.time, e.venue FROM ticket_requests r JOIN events e ON e.id = r.event_id WHERE r.ticket_token = ${req.params.token} AND r.status IN ('paid', 'approved') LIMIT 1`;
     if (!rows[0]) return res.status(404).json({ error: "Ticket not found." });
     const pdf = createTicketPdf(rows[0]);
     res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="RSVP-DXB-${rows[0].id}.pdf"`, "Cache-Control": "private, no-store" });
@@ -658,6 +658,20 @@ app.get("/api/ticket-requests", async (req, res, next) => {
     if (!sql) return res.json([]);
     const rows = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status, r.paid_at AS "paidAt", r.ticket_delivered_at AS "ticketDeliveredAt", r.created_at AS "createdAt", e.id AS "eventId", e.title AS "eventTitle" FROM ticket_requests r JOIN events e ON e.id = r.event_id ORDER BY r.created_at DESC`;
     res.json(rows);
+  } catch (error) { next(error); }
+});
+app.post("/api/ticket-requests/:id/approve", async (req, res, next) => {
+  try {
+    if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to approve ticket requests." });
+    if (!sql) return res.status(503).json({ error: "Ticket delivery requires the connected database." });
+    const rows = await sql`UPDATE ticket_requests r SET status = 'approved', ticket_token = COALESCE(r.ticket_token, ${randomBytes(24).toString("hex")}) FROM events e WHERE r.id = ${req.params.id} AND r.event_id = e.id AND r.amount = 0 AND r.status IN ('pending', 'approved') RETURNING r.id, r.phone, r.status, r.ticket_token AS "ticketToken", r.ticket_delivered_at AS "ticketDeliveredAt", e.title AS "eventTitle"`;
+    const ticket = rows[0];
+    if (!ticket) return res.status(409).json({ error: "Only a pending free ticket request can be approved here. Paid tickets are issued after Stripe confirms payment." });
+    if (ticket.ticketDeliveredAt) return res.json({ status: ticket.status, ticketDeliveredAt: ticket.ticketDeliveredAt, message: "Ticket was already sent." });
+    const host = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+    await sendInfobipTicket(ticket.phone, `${host}/api/tickets/${ticket.ticketToken}.pdf`, `RSVP-DXB-${ticket.id}.pdf`, `Your free ticket for ${ticket.eventTitle} is confirmed.`);
+    const delivered = await sql`UPDATE ticket_requests SET ticket_delivered_at = NOW() WHERE id = ${ticket.id} RETURNING ticket_delivered_at AS "ticketDeliveredAt"`;
+    res.json({ status: ticket.status, ticketDeliveredAt: delivered[0]?.ticketDeliveredAt, message: "Approved and PDF ticket sent to the guest's WhatsApp." });
   } catch (error) { next(error); }
 });
 app.get("/api/auth/me", async (req, res, next) => {
@@ -1220,6 +1234,23 @@ app.post("/api/events", async (req, res, next) => {
 app.patch("/api/events/:id", async (req, res, next) => {
   try {
     const { status } = req.body;
+    const hasPriceUpdate = Object.hasOwn(req.body, "ticketPrice") || Object.hasOwn(req.body, "ticketCurrency");
+    if (hasPriceUpdate) {
+      const ticketPrice = Number(req.body.ticketPrice);
+      const ticketCurrency = String(req.body.ticketCurrency || "AED").toUpperCase();
+      if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency))
+        return res.status(400).json({ error: "Enter a valid non-negative ticket price and 3-letter currency." });
+      if (!sql) {
+        const item = demo.events.find((row) => row.id === req.params.id);
+        if (!item) return res.status(404).json({ error: "Event not found." });
+        item.ticketPrice = ticketPrice;
+        item.ticketCurrency = ticketCurrency;
+        return res.json(item);
+      }
+      const rows = await sql`UPDATE events SET ticket_price = ${ticketPrice}, ticket_currency = ${ticketCurrency}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`;
+      if (!rows[0]) return res.status(404).json({ error: "Event not found." });
+      return res.json(rows[0]);
+    }
     if (!["published", "closed", "pending", "draft"].includes(status))
       return res.status(400).json({ error: "Invalid event status." });
     if (!sql) {

@@ -136,6 +136,8 @@ ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS stripe_session_id TEXT NOT 
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_token TEXT UNIQUE;
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_delivered_at TIMESTAMPTZ;
+ALTER TABLE ticket_requests DROP CONSTRAINT IF EXISTS ticket_requests_status_check;
+ALTER TABLE ticket_requests ADD CONSTRAINT ticket_requests_status_check CHECK (status IN ('pending', 'awaiting_payment', 'approved', 'paid', 'rejected'));
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
