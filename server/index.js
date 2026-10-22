@@ -665,13 +665,25 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
     const secret = String(process.env.INFOBIP_WEBHOOK_SECRET || "").trim();
     if (!secret || req.get("authorization") !== `Bearer ${secret}`)
       return res.status(401).json({ error: "Unauthorized webhook." });
-    res.sendStatus(200);
-    const inbound = Array.isArray(req.body.results) ? req.body.results : [];
+    // Infobip can deliver either a results array or a single message object.
+    // Process first so provider retries can recover from transient send/API errors.
+    const inbound = Array.isArray(req.body)
+      ? req.body
+      : Array.isArray(req.body.results)
+        ? req.body.results
+        : req.body.result
+          ? [req.body.result]
+          : [req.body];
     for (const item of inbound) {
-      if (item.integrationType !== "WHATSAPP") continue;
+      if (item.integrationType && item.integrationType !== "WHATSAPP") continue;
       const phone = String(item.from || "").replace(/\D/g, "");
       const message = item.message || {};
-      const input = String(message.text || message.interactive?.listReply?.id || message.interactive?.listReply?.title || message.button?.payload || message.button?.text || "").trim();
+      const input = String(
+        message.text || message.text?.text || message.interactive?.listReply?.id ||
+        message.interactive?.listReply?.title || message.button?.payload ||
+        message.button?.text || message.buttonReply?.payload || message.buttonReply?.title ||
+        item.text || item.text?.text || item.interactive?.listReply?.id || "",
+      ).trim();
       if (!phone || !input) continue;
       const directEventMatch = input.match(/^rsvpdxb\s+event\s+(.+)$/i);
       if (!directEventMatch && /^(rsvpdxb(?:\s+events?)?|hi|hello|start|events|ticket|request)$/i.test(input)) {
@@ -732,6 +744,7 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         await sendInfobipWhatsApp(phone, `Your request for ${event.title} is saved, but checkout could not be started. Please contact the RSVP DXB team.`);
       }
     }
+    res.sendStatus(200);
   } catch (error) {
     if (!res.headersSent) next(error);
     else console.error("Infobip webhook processing failed:", error?.message || error);
