@@ -476,7 +476,9 @@ async function sendInfobipWhatsApp(to, textMessage, events = []) {
   const base = String(process.env.INFOBIP_BASE_URL || "").trim().replace(/\/$/, "");
   const apiKey = String(process.env.INFOBIP_API_KEY || "").trim();
   const sender = String(process.env.INFOBIP_WHATSAPP_SENDER || "").trim();
-  if (!base || !apiKey || !sender) return;
+  if (!base || !apiKey || !sender) {
+    throw new Error(`Infobip WhatsApp is not configured (base URL: ${Boolean(base)}, API key: ${Boolean(apiKey)}, sender: ${Boolean(sender)}).`);
+  }
   const payload = events.length
     ? {
         from: sender,
@@ -498,7 +500,28 @@ async function sendInfobipWhatsApp(to, textMessage, events = []) {
     method: "POST", headers: { Authorization: `App ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),
   });
-  if (!response.ok) throw new Error(`Infobip WhatsApp returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Infobip WhatsApp returned HTTP ${response.status}: ${(await response.text()).slice(0, 1000)}`);
+  const result = await response.json().catch(() => null);
+  const messageStatus = result?.messages?.[0]?.status?.name;
+  if (messageStatus && !["PENDING_ACCEPTED", "PENDING_ENROUTE", "DELIVERED"].includes(messageStatus)) {
+    throw new Error(`Infobip did not accept WhatsApp message: ${messageStatus} ${result?.messages?.[0]?.status?.description || ""}`.trim());
+  }
+}
+
+function getInfobipInboundText(item) {
+  const message = item?.message || item?.messageData || {};
+  const candidates = [
+    message.text, message.text?.text, message.text?.body,
+    message.interactive?.listReply?.id, message.interactive?.listReply?.title,
+    message.interactive?.list_reply?.id, message.interactive?.list_reply?.title,
+    message.button?.payload, message.button?.text,
+    message.buttonReply?.payload, message.buttonReply?.title,
+    message.button_reply?.payload, message.button_reply?.title,
+    item?.text, item?.text?.text, item?.text?.body,
+    item?.interactive?.listReply?.id, item?.interactive?.listReply?.title,
+    item?.interactive?.list_reply?.id, item?.interactive?.list_reply?.title,
+  ];
+  return String(candidates.find((value) => typeof value === "string" && value.trim()) || "").trim();
 }
 
 async function sendInfobipWhatsAppPayment(to, checkoutUrl, event, guestName, amount, currency) {
@@ -675,16 +698,18 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
           ? [req.body.result]
           : [req.body];
     for (const item of inbound) {
-      if (item.integrationType && item.integrationType !== "WHATSAPP") continue;
-      const phone = String(item.from || "").replace(/\D/g, "");
-      const message = item.message || {};
-      const input = String(
-        message.text || message.text?.text || message.interactive?.listReply?.id ||
-        message.interactive?.listReply?.title || message.button?.payload ||
-        message.button?.text || message.buttonReply?.payload || message.buttonReply?.title ||
-        item.text || item.text?.text || item.interactive?.listReply?.id || "",
-      ).trim();
-      if (!phone || !input) continue;
+      if (item.integrationType && !String(item.integrationType).toUpperCase().includes("WHATSAPP")) continue;
+      const phone = String(item.from || item.sender || item.contact?.waId || item.contact?.phone || "").replace(/\D/g, "");
+      const input = getInfobipInboundText(item);
+      if (!phone) {
+        console.warn("Infobip inbound message has no sender phone; fields:", Object.keys(item || {}));
+        continue;
+      }
+      if (!input) {
+        console.warn("Infobip inbound message has no text; fields:", Object.keys(item || {}));
+        await sendInfobipWhatsApp(phone, "Hi! Send *events* to see upcoming events and request a ticket.");
+        continue;
+      }
       const directEventMatch = input.match(/^rsvpdxb\s+event\s+(.+)$/i);
       if (!directEventMatch && /^(rsvpdxb(?:\s+events?)?|hi|hello|start|events|ticket|request)$/i.test(input)) {
         const events = sql
@@ -703,7 +728,7 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         ? (await sql`SELECT id, title, date::text AS date, time, venue, image_data AS "imageData", ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency", status FROM events WHERE (id = ${selectedEventId} OR lower(title) = lower(${selectedEventTitle})) AND status = 'published' AND date >= CURRENT_DATE LIMIT 1`)[0]
         : demo.events.find((row) => (row.id === selectedEventId || row.title.toLowerCase() === selectedEventTitle.toLowerCase()) && row.status === "published" && row.date >= new Date().toISOString().slice(0, 10));
       if (!event) {
-        await sendInfobipWhatsApp(phone, "Please send “events” to see the current list, then select an event.");
+        await sendInfobipWhatsApp(phone, "Sorry, I couldn't match that event. Send *events* to see the current list, then choose an event.");
         continue;
       }
       const id = `ticket-${text(item.messageId, 100) || randomBytes(12).toString("hex")}`;
