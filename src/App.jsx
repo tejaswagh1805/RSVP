@@ -105,7 +105,7 @@ export default function App() {
   const pages = {
     dashboard: <Dashboard data={data} navigate={navigate} />,
     applications: <Applications rows={data.applications} query={search} setQuery={setSearch} act={act} />,
-    members: <Members rows={data.members} query={search} setQuery={setSearch} />,
+    members: <Members rows={data.members} query={search} setQuery={setSearch} act={act} />,
     events: <Events rows={data.events} guests={data.guests} act={act} openModal={setModal} />,
     websiteMedia: <WebsiteMedia rows={data.siteMedia} act={act} />,
     peopleProfiles: <PeopleProfiles rows={data.peopleProfiles} act={act} />,

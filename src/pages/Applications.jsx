@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Search } from 'lucide-react';
+import { Check, Search, Trash2 } from 'lucide-react';
 import { api } from '../api.js';
 import { EmptyState, PageIntro } from '../components/UI.jsx';
 import { dateLabel } from '../lib/constants.js';
@@ -16,6 +16,10 @@ export default function Applications({ rows, query, setQuery, act }) {
     const matchesSearch = `${row.name} ${row.email} ${row.track} ${row.city} ${row.handle}`.toLowerCase().includes(query.toLowerCase());
     return matchesStatus && matchesSearch && (categoryFilter === 'all' || (creators.includes(row) && matchesCategory));
   });
+  const removeApplication = (row) => {
+    const confirmed = window.confirm(`Permanently delete ${row.name}${row.email ? ` (${row.email})` : ''} and any linked member account from the database? This cannot be undone.`);
+    if (confirmed) act(() => api.deleteApplication(row.id), `${row.name} and linked member account deleted`);
+  };
   return <>
     <PageIntro title="Review member applications" detail="Review profile details before activating a member account." action={<div className="search-box section-search"><Search size={15} /><input placeholder="Search applications" value={query} onChange={(e) => setQuery(e.target.value)} /></div>} />
     <div className="filter-tabs">{['pending', 'approved', 'rejected', 'all'].map((name) => <button className={filter === name ? 'selected' : ''} onClick={() => setFilter(name)} key={name}>{name[0].toUpperCase() + name.slice(1)} <span>{name === 'all' ? rows.length : rows.filter((row) => row.status === name).length}</span></button>)}</div>
@@ -32,7 +36,7 @@ export default function Applications({ rows, query, setQuery, act }) {
         {(row.mobile || row.platform || row.handle || row.outlet || row.profileUrl) && <div className="application-meta"><span>{row.mobile || 'No mobile'}</span><i /><span>{[row.platform, row.handle].filter(Boolean).join(' · ') || 'No social profile'}</span>{row.outlet && <><i /><span>{row.outlet}</span></>}{/^https?:\/\//i.test(row.profileUrl || '') && <><i /><a href={row.profileUrl} target="_blank" rel="noreferrer">Open profile</a></>}</div>}
         {row.allProfiles && <details className="application-profiles"><summary>Additional profile links</summary><p>{row.allProfiles}</p></details>}
       </div>
-      {row.status === 'pending' ? <div className="application-actions"><button className="button button-approve" onClick={() => act(() => api.decideApplication(row.id, 'approved'), `${row.name} approved`)}><Check size={15} /> Approve</button><button className="button button-danger-outline" onClick={() => act(() => api.decideApplication(row.id, 'rejected'), `${row.name} rejected`)}>Reject</button></div> : <span className="muted-text">{row.status === 'approved' ? 'Member account active' : 'Application rejected'}</span>}
+      <div className="application-actions">{row.status === 'pending' ? <><button className="button button-approve" onClick={() => act(() => api.decideApplication(row.id, 'approved'), `${row.name} approved`)}><Check size={15} /> Approve</button><button className="button button-danger-outline" onClick={() => act(() => api.decideApplication(row.id, 'rejected'), `${row.name} rejected`)}>Reject</button></> : <span className="muted-text">{row.status === 'approved' ? 'Member account active' : 'Application rejected'}</span>}<button className="button button-danger-outline" onClick={() => removeApplication(row)}><Trash2 size={14} /> Delete</button></div>
     </article>)}{shown.length === 0 && <EmptyState title="No applications in this view" detail="Try another status or search term." />}</div>
   </>;
 }

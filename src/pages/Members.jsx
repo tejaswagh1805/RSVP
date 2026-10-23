@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
-import { ArrowUpRight, ChevronDown, Download, Filter, Search } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, Download, Filter, Search, Trash2 } from 'lucide-react';
+import { api } from '../api.js';
 import { EmptyState, PageIntro } from '../components/UI.jsx';
 import { TRACKS, dateLabel } from '../lib/constants.js';
 import { downloadExcel } from '../lib/downloadExcel.js';
@@ -27,12 +28,16 @@ function MemberDetail({ member, label, field }) {
   </div>;
 }
 
-export default function Members({ rows, query, setQuery }) {
+export default function Members({ rows, query, setQuery, act }) {
   const [track, setTrack] = useState('All tracks');
   const [expandedId, setExpandedId] = useState(null);
   const searchFields = (row) => [row.name, row.email, row.city, row.track, row.sourceTrack, row.handle, row.platform, row.mobile, row.outlet, row.role, row.allProfiles].join(' ').toLowerCase();
   const filtered = rows.filter((row) => (track === 'All tracks' || row.track === track) && searchFields(row).includes(query.toLowerCase()));
   const exportExcel = () => downloadExcel('rsvp-dxb-members.xlsx', ['Name', 'Track', 'Profile', 'Handle', 'Platform', 'Followers', 'Email', 'Mobile', 'City', 'Outlet', 'Role', 'All profiles', 'Tier', 'Points', 'Status', 'Joined'], filtered.map((row) => [row.name, row.sourceTrack || row.track, row.profileUrl, row.handle, row.platform, row.followers, row.email, row.mobile, row.city, row.outlet, row.role, row.allProfiles, row.rank, row.points, row.status, row.joined]));
+  const removeMember = (row) => {
+    const confirmed = window.confirm(`Permanently delete ${row.name}${row.email ? ` (${row.email})` : ''} and the linked application from the database? This cannot be undone.`);
+    if (confirmed) act(() => api.deleteMember(row.id), `${row.name} and linked application deleted`);
+  };
 
   return <>
     <div className="member-stat-grid">{TRACKS.map((name, index) => <div className="member-stat" key={name}><span className={`track-indicator track-${index}`} /><div><span>{name}</span><strong>{rows.filter((row) => row.track === name).length.toLocaleString()}</strong></div><ArrowUpRight size={14} /></div>)}</div>
@@ -73,6 +78,7 @@ export default function Members({ rows, query, setQuery }) {
         {isExpanded && <tr className="member-details-row"><td colSpan="11"><section className="member-accordion" id={`member-details-${row.id}`} aria-label={`${row.name} details`}>
           <div className="member-accordion-heading"><div><span className="eyebrow">MEMBER DETAILS</span><h3>{row.name}</h3></div><span className={`track-tag ${row.track === 'Private Circle' ? 'tag-red' : ''}`}>{row.track}</span></div>
           <div className="member-accordion-grid">{memberFields.map(([label, field]) => <MemberDetail key={field} member={row} label={label} field={field} />)}</div>
+          <div className="member-accordion-actions"><button className="button button-danger-outline" onClick={() => removeMember(row)}><Trash2 size={14} /> Delete member and application</button></div>
         </section></td></tr>}
       </Fragment>;
     })}</tbody></table>{filtered.length === 0 && <EmptyState title="No members found" detail="Members appear here after an application is approved or the existing member list is imported." />}</div>

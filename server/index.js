@@ -1420,6 +1420,62 @@ app.patch("/api/applications/:id", async (req, res, next) => {
   }
 });
 
+app.delete("/api/applications/:id", async (req, res, next) => {
+  try {
+    if (!sql) {
+      const index = demo.applications.findIndex((item) => item.id === req.params.id);
+      if (index < 0) return res.status(404).json({ error: "Application not found." });
+      const [application] = demo.applications.splice(index, 1);
+      const before = demo.members.length;
+      demo.members = demo.members.filter((member) => member.email?.toLowerCase() !== application.email?.toLowerCase());
+      return res.json({ ok: true, applicationDeleted: true, membersDeleted: before - demo.members.length });
+    }
+    const rows = await sql`
+      WITH deleted_application AS (
+        DELETE FROM applications WHERE id = ${req.params.id} RETURNING email
+      ), deleted_members AS (
+        DELETE FROM members AS member USING deleted_application AS application
+        WHERE lower(member.email) = lower(application.email) RETURNING member.id
+      )
+      SELECT TRUE AS ok,
+        (SELECT COUNT(*)::int FROM deleted_members) AS "membersDeleted"
+      FROM deleted_application
+    `;
+    if (!rows[0]) return res.status(404).json({ error: "Application not found." });
+    res.json({ ...rows[0], applicationDeleted: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/members/:id", async (req, res, next) => {
+  try {
+    if (!sql) {
+      const index = demo.members.findIndex((member) => member.id === req.params.id);
+      if (index < 0) return res.status(404).json({ error: "Member not found." });
+      const [member] = demo.members.splice(index, 1);
+      const before = demo.applications.length;
+      demo.applications = demo.applications.filter((application) => application.email?.toLowerCase() !== member.email?.toLowerCase());
+      return res.json({ ok: true, memberDeleted: true, applicationsDeleted: before - demo.applications.length });
+    }
+    const rows = await sql`
+      WITH deleted_member AS (
+        DELETE FROM members WHERE id = ${req.params.id} RETURNING email
+      ), deleted_applications AS (
+        DELETE FROM applications AS application USING deleted_member AS member
+        WHERE lower(application.email) = lower(member.email) RETURNING application.id
+      )
+      SELECT TRUE AS ok,
+        (SELECT COUNT(*)::int FROM deleted_applications) AS "applicationsDeleted"
+      FROM deleted_member
+    `;
+    if (!rows[0]) return res.status(404).json({ error: "Member not found." });
+    res.json({ ...rows[0], memberDeleted: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/events", async (req, res, next) => {
   try {
     const title = text(req.body.title, 180);
