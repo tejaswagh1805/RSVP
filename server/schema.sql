@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS events (
   image_key TEXT NOT NULL DEFAULT '',
   image_data TEXT NOT NULL DEFAULT '',
   image_gallery TEXT[] NOT NULL DEFAULT '{}',
+  video_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'pending', 'published', 'closed')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -83,6 +84,36 @@ CREATE TABLE IF NOT EXISTS wall_posts (
   event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS site_media (
+  id TEXT PRIMARY KEY,
+  slot TEXT NOT NULL CHECK (slot IN ('gallery', 'top_pick')),
+  title TEXT NOT NULL,
+  caption TEXT NOT NULL DEFAULT '',
+  image_url TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  link_url TEXT NOT NULL DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS people_profiles (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL CHECK (category IN ('artist', 'influencer')),
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT '',
+  bio TEXT NOT NULL DEFAULT '',
+  image_url TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  instagram_url TEXT NOT NULL DEFAULT '',
+  tiktok_url TEXT NOT NULL DEFAULT '',
+  youtube_url TEXT NOT NULL DEFAULT '',
+  x_url TEXT NOT NULL DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS clients (
@@ -194,6 +225,7 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS host_note TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS image_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS image_data TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS image_gallery TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS video_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_status_check;

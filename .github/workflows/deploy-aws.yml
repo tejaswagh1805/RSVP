@@ -1,0 +1,93 @@
+name: Deploy admin dashboard to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-admin-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: rsvp-dxb-admin
+  LAMBDA_FUNCTION: RSVPAdminDashboard
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::294056655876:role/GitHubDeployRSVPAdmin
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sign in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Lambda image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build --platform linux/amd64 -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+
+      - name: Deploy image to Lambda
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          EXECUTION_ROLE: arn:aws:iam::294056655876:role/RSVPApplicationLambdaRole
+          DISTRIBUTION_ID: EYHJHOX0AY6EP
+          ORIGIN_ID: rsvp-admin-render-origin
+          ENV_PARAMETER: /rsvp/prod/admin-env
+        run: |
+          set -euo pipefail
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          FUNCTION_ENV="$(aws ssm get-parameter --name "$ENV_PARAMETER" --with-decryption --query 'Parameter.Value' --output text --region "$AWS_REGION")"
+          printf '%s' "$FUNCTION_ENV" | jq -c '{Variables: .}' > /tmp/lambda-environment.json
+          if aws lambda get-function --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION" >/dev/null 2>&1; then
+            aws lambda update-function-code --function-name "$LAMBDA_FUNCTION" --image-uri "$IMAGE_URI" --region "$AWS_REGION" >/dev/null
+          else
+            aws lambda create-function --function-name "$LAMBDA_FUNCTION" --package-type Image --code "ImageUri=$IMAGE_URI" --role "$EXECUTION_ROLE" --timeout 60 --memory-size 1024 --environment file:///tmp/lambda-environment.json --region "$AWS_REGION" >/dev/null
+            aws lambda wait function-active-v2 --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION"
+          fi
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION"
+          aws lambda update-function-configuration --function-name "$LAMBDA_FUNCTION" --environment file:///tmp/lambda-environment.json --region "$AWS_REGION" >/dev/null
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION"
+          if ! aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION" >/dev/null 2>&1; then
+            aws lambda create-function-url-config --function-name "$LAMBDA_FUNCTION" --auth-type NONE --invoke-mode BUFFERED --region "$AWS_REGION" >/dev/null
+            aws lambda add-permission --function-name "$LAMBDA_FUNCTION" --statement-id FunctionUrlPublicAccess --action lambda:InvokeFunctionUrl --principal '*' --function-url-auth-type NONE --region "$AWS_REGION" >/dev/null
+            aws lambda add-permission --function-name "$LAMBDA_FUNCTION" --statement-id FunctionUrlInvokeFunction --action lambda:InvokeFunction --principal '*' --invoked-via-function-url --region "$AWS_REGION" >/dev/null
+          fi
+          aws lambda publish-version --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION" >/dev/null
+          FUNCTION_URL="$(aws lambda get-function-url-config --function-name "$LAMBDA_FUNCTION" --query FunctionUrl --output text --region "$AWS_REGION")"
+          ORIGIN_DOMAIN="${FUNCTION_URL#https://}"
+          ORIGIN_DOMAIN="${ORIGIN_DOMAIN%/}"
+          ORIGIN_SECRET="$(printf '%s' "$FUNCTION_ENV" | jq -r '.CLOUDFRONT_ORIGIN_SECRET')"
+          if [ "$(curl -sS -o /dev/null -w '%{http_code}' "$FUNCTION_URL")" != "403" ]; then
+            echo "Lambda origin security check failed" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
+            -H "X-Origin-Verify: $ORIGIN_SECRET" "$FUNCTION_URL/api/health" -o /dev/null
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" --output json > /tmp/cf-config-response.json
+          ETAG="$(jq -r '.ETag' /tmp/cf-config-response.json)"
+          jq --arg origin "$ORIGIN_ID" --arg domain "$ORIGIN_DOMAIN" --arg secret "$ORIGIN_SECRET" \
+            '.DistributionConfig | (.Origins.Items[] | select(.Id == $origin)) |= (.DomainName = $domain | .CustomHeaders = {Quantity: 1, Items: [{HeaderName: "X-Origin-Verify", HeaderValue: $secret}]})' \
+            /tmp/cf-config-response.json > /tmp/cf-config.json
+          aws cloudfront update-distribution --id "$DISTRIBUTION_ID" --if-match "$ETAG" --distribution-config file:///tmp/cf-config.json >/dev/null
+          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
+            "https://d1f5sjkm09kt76.cloudfront.net/api/health" -o /dev/null

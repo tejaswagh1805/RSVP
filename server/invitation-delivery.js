@@ -43,12 +43,12 @@ const providerMessage = async (response, provider) => {
 
 export async function sendInvitationEmail({ guestName, email, event, invitationUrl, tableNo }) {
   if (!email) return { status: "skipped", message: "No email address was provided." };
-  const region = String(process.env.AWS_REGION || "").trim();
+  const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
   const from = String(process.env.SES_FROM_EMAIL || "").trim();
   if (!region || !from)
     return {
       status: "not_configured",
-      message: "Email delivery is not configured. Set AWS_REGION and SES_FROM_EMAIL.",
+      message: "Email delivery is not configured. Set SES_REGION and SES_FROM_EMAIL.",
     };
 
   const title = String(event.title || "You're invited");

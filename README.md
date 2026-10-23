@@ -7,6 +7,13 @@ Admin only dashboard for applications, members, events, guest invitations, wall 
 - React and Vite frontend
 - Node.js and Express API
 - Neon Postgres persistence through `@neondatabase/serverless`
+- Event media uploads to Amazon S3 using short-lived presigned URLs
+
+## Event media
+
+The admin event form uploads up to five JPG, PNG, or WebP photos (12 MB each, 40 MB total) and one MP4, WebM, or MOV video (100 MB) to the configured S3 media bucket. New uploads use `media/<uuid>-<filename>` keys and appear directly under `media/` in the S3 console; S3 does not create real folders. Neon stores CloudFront HTTPS URLs with event and profile content. The S3 bucket is private for reads; its policy grants the CloudFront distribution access to `media/*`, while the authenticated admin API signs uploads and its IAM identity can only write under that prefix.
+
+For local development, configure `AWS_REGION`, `S3_MEDIA_BUCKET`, `S3_MEDIA_BASE_URL`, and optional local AWS credentials in the private `.env`. Production runs on AWS using an execution role and encrypted settings in Systems Manager Parameter Store. Do not use an S3 URI (`s3://...`) as a browser URL; browsers need an HTTPS URL. The media bucket is `rsvp-dxb-media-294056655876-eu-north-1` in `eu-north-1`.
 
 The server starts with local demonstration data when `DATABASE_URL` is not set. That mode is useful for exploring the dashboard; changes reset when the server restarts. The local demo account is `tejas@rsvpdxb.local` with password `demo1234`.
 
@@ -39,13 +46,19 @@ Provider acceptance does not guarantee inbox delivery or WhatsApp delivery. The 
 
 ## Infobip ticket request chatbot
 
-The customer event cards open a WhatsApp chat with a prefilled event request. Set `VITE_RSVP_WHATSAPP_NUMBER` in the customer app's build environment to your Infobip sender number in international digits. The Express webhook at `/api/whatsapp/infobip/webhook` lists published future events and creates a Stripe Checkout link for the selected paid event. Set `INFOBIP_BASE_URL`, `INFOBIP_API_KEY`, `INFOBIP_WHATSAPP_SENDER`, and `INFOBIP_WEBHOOK_SECRET`. Configure the Infobip inbound-message webhook to POST to `https://YOUR-RENDER-HOST/api/whatsapp/infobip/webhook` with `Authorization: Bearer YOUR_INFOBIP_WEBHOOK_SECRET`.
+The customer event cards open a WhatsApp chat with a prefilled event request. Set `VITE_RSVP_WHATSAPP_NUMBER` in the customer app's GitHub Actions variable (or update the workflow default) to your Infobip sender number in international digits. The Express webhook at `/api/whatsapp/infobip/webhook` lists published future events and creates a Stripe Checkout link for the selected paid event. Set `INFOBIP_BASE_URL`, `INFOBIP_API_KEY`, `INFOBIP_WHATSAPP_SENDER`, and `INFOBIP_WEBHOOK_SECRET` in `/rsvp/prod/admin-env` in AWS Systems Manager Parameter Store. Configure the Infobip inbound-message webhook to POST to `https://d1f5sjkm09kt76.cloudfront.net/api/whatsapp/infobip/webhook` with `Authorization: Bearer YOUR_INFOBIP_WEBHOOK_SECRET`.
 
-For paid ticket checkout, set `STRIPE_SECRET_KEY` to your Stripe test secret (`sk_test_...`) while testing. In Stripe Dashboard, create a webhook endpoint at `https://rsvp-cytl.onrender.com/api/payments/stripe/webhook` and subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`; set `STRIPE_WEBHOOK_SECRET` to the endpoint's signing secret (`whsec_...`). Keep both values private. Set each event's ticket price and currency in the admin event record; free events remain confirmation-only. After payment, the webhook issues a token-protected PDF at `/api/tickets/:token.pdf` and sends it to the buyer's WhatsApp. Infobip document delivery requires a publicly reachable HTTPS file URL and may be limited by WhatsApp's 24-hour customer service window. Run `npm run db:setup` with the same `DATABASE_URL` after this schema change, then deploy the API. Test with Stripe test mode before switching to live keys.
+For paid ticket checkout, set `STRIPE_SECRET_KEY` to your Stripe test secret (`sk_test_...`) while testing. In Stripe Dashboard, create a webhook endpoint at `https://d1f5sjkm09kt76.cloudfront.net/api/payments/stripe/webhook` and subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`; set `STRIPE_WEBHOOK_SECRET` in `/rsvp/prod/admin-env` in AWS Systems Manager Parameter Store. Keep both values private. Set each event's ticket price and currency in the admin event record; free events remain confirmation-only. After payment, the webhook issues a token-protected PDF at `/api/tickets/:token.pdf` and sends it to the buyer's WhatsApp. Infobip document delivery requires a publicly reachable HTTPS file URL and may be limited by WhatsApp's 24-hour customer service window. Run `npm run db:setup` with the same `DATABASE_URL` after this schema change, then push to `main` to deploy. Test with Stripe test mode before switching to live keys.
 
-Staging Render services shown for this setup are the API/dashboard at `https://rsvp-cytl.onrender.com` and customer app at `https://rsvp-dxb-customer.onrender.com`. In the existing `RSVP` service settings, set the variables from this project's `.env.example`, including `CLIENT_ORIGIN` and `PUBLIC_SITE_URL` pointing to the customer service. Apply the database schema once with `npm run db:setup` from this project using the same `DATABASE_URL`. In the existing `RSVP-DXB_customer` service, set `VITE_RSVP_WHATSAPP_NUMBER` to the Infobip sender's international phone number (digits only), then redeploy so Vite embeds it in the site. Configure the Infobip inbound webhook to use the API URL above.
+## AWS deployment
 
-The Render breadcrumb in the supplied screenshot says `Production`; `APP_ENV=staging` is only an app label and does not create an isolated Render staging environment. These free services can be used for testing, but they are the services currently marked Production in Render.
+Each repository now has a GitHub Actions workflow at `.github/workflows/deploy-aws.yml`. Once these changes are pushed to each repository's `main`, a push builds and pushes a Lambda container image to ECR, deploys it to its Lambda function, checks the function, then updates the matching CloudFront origin. GitHub uses OIDC roles restricted to the corresponding repository's `main` branch; no AWS access keys are stored in GitHub.
+
+- Admin/API: `https://d1f5sjkm09kt76.cloudfront.net` (distribution `EYHJHOX0AY6EP`).
+- Customer site: `https://d25iiefhi451d5.cloudfront.net` (distribution `E3FPVV4872MP1A`).
+- Media CDN: `https://d11qncwozli5s0.cloudfront.net`.
+
+Runtime environment settings are stored as encrypted parameters `/rsvp/prod/admin-env` and `/rsvp/prod/customer-env` in `eu-west-1`. After the first successful workflow run for each repo, future pushes to its `main` branch deploy automatically. Until then, the app distributions still use their existing origins.
 
 ## Existing members and new registrations
 

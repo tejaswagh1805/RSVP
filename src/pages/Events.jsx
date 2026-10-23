@@ -40,41 +40,45 @@ export default function Events({ rows, guests, act, openModal }) {
 }
 
 export function EventModal({ close, act }) {
-  const [form, setForm] = useState({ title: '', brand: '', venue: '', area: '', date: '', time: '', capacity: 80, ticketPrice: 0, ticketCurrency: 'AED', category: 'Dining', tracks: ['Creators'], dressCode: '', about: '', included: '', whoIsInvited: '', hostNote: '', imageDataList: [] });
+  const [form, setForm] = useState({ title: '', brand: '', venue: '', area: '', date: '', time: '', capacity: 80, ticketPrice: 0, ticketCurrency: 'AED', category: 'Dining', tracks: ['Creators'], dressCode: '', about: '', included: '', whoIsInvited: '', hostNote: '', imageFiles: [], videoFile: null });
   const [busy, setBusy] = useState(false);
   const [imageError, setImageError] = useState('');
   const set = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
   const onImages = async (fileList) => {
     setImageError('');
     const files = Array.from(fileList || []);
-    if (form.imageDataList.length + files.length > 5) { setImageError('Choose up to 5 event images.'); return; }
+    if (form.imageFiles.length + files.length > 5) { setImageError('Choose up to 5 event images.'); return; }
     if (files.some((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) { setImageError('Choose JPG, PNG or WebP images.'); return; }
-    if (files.some((file) => file.size > 400_000) || [...files, ...form.imageDataList.map((data) => ({ size: Math.floor((data.length * 3) / 4) }))].reduce((total, file) => total + file.size, 0) > 1_500_000) {
-      setImageError('Each image must be 400 KB or smaller, with up to 1.5 MB total.');
+    if (files.some((file) => file.size > 12 * 1024 * 1024) || [...files, ...form.imageFiles.map((item) => item.file)].reduce((total, file) => total + file.size, 0) > 40 * 1024 * 1024) {
+      setImageError('Each image must be 12 MB or smaller, with up to 40 MB total.');
       return;
     }
-    try {
-      const images = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      })));
-      set('imageDataList', [...form.imageDataList, ...images]);
-    } catch { setImageError('An image could not be read. Please choose it again.'); }
+    set('imageFiles', [...form.imageFiles, ...files.map((file) => ({ file, preview: URL.createObjectURL(file) }))]);
+  };
+  const upload = async (file) => {
+    const { uploadUrl, publicUrl } = await api.mediaUploadUrl(file);
+    const response = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+    if (!response.ok) throw new Error('Upload to media storage failed.');
+    return publicUrl;
   };
   const submit = async (status) => {
     if (!form.title.trim() || !form.brand.trim() || !form.date || imageError) return;
     setBusy(true);
-    await act(() => api.createEvent({ ...form, imageData: form.imageDataList[0] || '', included: form.included.split(/\n|,/).map((item) => item.trim()).filter(Boolean), status, confirmed: 0 }), status === 'published' ? 'Event created and published' : 'Event saved as draft');
-    setBusy(false);
-    close();
+    try {
+      const imageDataList = await Promise.all(form.imageFiles.map(({ file }) => upload(file)));
+      const videoUrl = form.videoFile ? await upload(form.videoFile) : '';
+      await act(() => api.createEvent({ ...form, imageFiles: undefined, videoFile: undefined, imageData: imageDataList[0] || '', imageDataList, videoUrl, included: form.included.split(/\n|,/).map((item) => item.trim()).filter(Boolean), status, confirmed: 0 }), status === 'published' ? 'Event created and published' : 'Event saved as draft');
+      close();
+    } catch (error) { setImageError(error.message || 'Media upload failed. Please try again.'); }
+    finally { setBusy(false); }
   };
   const toggle = (name) => set('tracks', form.tracks.includes(name) ? form.tracks.filter((track) => track !== name) : [...form.tracks, name]);
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}><section className="modal-card"><div className="modal-header"><div><div className="eyebrow">EVENT SETUP</div><h2>Create an event</h2></div><button className="icon-button" onClick={close}><X size={18} /></button></div><div className="modal-body">
     <label className="field"><span>Event title *</span><input autoFocus value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="e.g. Sunset Listening Session" /></label>
     <div className="form-grid"><label className="field"><span>Host brand *</span><input value={form.brand} onChange={(e) => set('brand', e.target.value)} placeholder="Brand name" /></label><label className="field"><span>Category</span><select value={form.category} onChange={(e) => set('category', e.target.value)}>{['Dining', 'Fashion', 'Property', 'Music', 'Art', 'Nightlife', 'Wellness', 'Travel'].map((name) => <option key={name}>{name}</option>)}</select></label><label className="field"><span>Date *</span><input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></label><label className="field"><span>Time</span><input type="time" value={form.time} onChange={(e) => set('time', e.target.value)} /></label><label className="field"><span>Venue</span><input value={form.venue} onChange={(e) => set('venue', e.target.value)} placeholder="Venue" /></label><label className="field"><span>Area</span><input value={form.area} onChange={(e) => set('area', e.target.value)} placeholder="e.g. DIFC" /></label><label className="field"><span>Guest capacity</span><input type="number" min="1" value={form.capacity} onChange={(e) => set('capacity', Number(e.target.value))} /></label><label className="field"><span>Ticket price (AED)</span><input type="number" min="0" step="0.01" value={form.ticketPrice} onChange={(e) => set('ticketPrice', Number(e.target.value))} /></label><label className="field"><span>Dress code</span><input value={form.dressCode} onChange={(e) => set('dressCode', e.target.value)} placeholder="e.g. Smart elegant" /></label></div>
-    <label className="field"><span>Event photos (up to 5 JPG, PNG or WebP images)</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(e) => { onImages(e.target.files); e.target.value = ''; }} /><small className="muted-text">Up to 400 KB per image and 1.5 MB total. The first image is used as the event cover.</small>{form.imageDataList.length > 0 ? <div className="event-image-gallery">{form.imageDataList.map((image, index) => <div className="event-image-tile" key={`${index}-${image.slice(-12)}`}><img src={image} alt={`Event preview ${index + 1}`} /><span>{index === 0 ? 'Cover' : `Photo ${index + 1}`}</span><button type="button" aria-label={`Remove photo ${index + 1}`} onClick={() => set('imageDataList', form.imageDataList.filter((_, imageIndex) => imageIndex !== index))}><X size={14} /></button></div>)}</div> : null}{imageError ? <small className="event-image-error" role="alert">{imageError}</small> : null}</label>
+    <label className="field"><span>Event photos (up to 5 JPG, PNG or WebP images)</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(e) => { onImages(e.target.files); e.target.value = ''; }} /><small className="muted-text">Up to 12 MB per image and 40 MB total. Images upload securely to S3; the first is used as the event cover.</small>{form.imageFiles.length > 0 ? <div className="event-image-gallery">{form.imageFiles.map((item, index) => <div className="event-image-tile" key={`${index}-${item.file.name}`}><img src={item.preview} alt={`Event preview ${index + 1}`} /><span>{index === 0 ? 'Cover' : `Photo ${index + 1}`}</span><button type="button" aria-label={`Remove photo ${index + 1}`} onClick={() => { URL.revokeObjectURL(item.preview); set('imageFiles', form.imageFiles.filter((_, imageIndex) => imageIndex !== index)); }}><X size={14} /></button></div>)}</div> : null}</label>
+    <label className="field"><span>Event video (optional, up to 100 MB)</span><input type="file" accept="video/mp4,video/webm,video/quicktime" onChange={(e) => { const file = e.target.files?.[0] || null; if (file && (!['video/mp4', 'video/webm', 'video/quicktime'].includes(file.type) || file.size > 100 * 1024 * 1024)) setImageError('Choose an MP4, WebM or MOV video up to 100 MB.'); else { setImageError(''); set('videoFile', file); } e.target.value = ''; }} />{form.videoFile ? <small className="muted-text">Selected: {form.videoFile.name}</small> : null}</label>
+    {imageError ? <small className="event-image-error" role="alert">{imageError}</small> : null}
     <label className="field"><span>About this event</span><textarea rows="3" value={form.about} onChange={(e) => set('about', e.target.value)} placeholder="Describe the event" /></label>
     <label className="field"><span>What is included (one item per line or comma separated)</span><textarea rows="2" value={form.included} onChange={(e) => set('included', e.target.value)} placeholder="Welcome drink, tasting menu" /></label>
     <label className="field"><span>Who is invited</span><textarea rows="2" value={form.whoIsInvited} onChange={(e) => set('whoIsInvited', e.target.value)} placeholder="Guest eligibility" /></label>

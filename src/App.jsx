@@ -14,10 +14,12 @@ import Clients from './pages/Clients.jsx';
 import Door from './pages/Door.jsx';
 import SignIn from './pages/SignIn.jsx';
 import Register from './pages/Register.jsx';
+import WebsiteMedia from './pages/WebsiteMedia.jsx';
+import PeopleProfiles from './pages/PeopleProfiles.jsx';
 
 export default function App() {
   const [page, setPage] = useState(() => location.hash.replace('#/', '') || 'dashboard');
-  const [data, setData] = useState({ applications: [], members: [], events: [], wall: [], clients: [], guests: [], dashboard: {} });
+  const [data, setData] = useState({ applications: [], members: [], events: [], siteMedia: [], peopleProfiles: [], wall: [], clients: [], guests: [], dashboard: {} });
   const [admin, setAdmin] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [demoMode, setDemoMode] = useState(false);
@@ -33,10 +35,17 @@ export default function App() {
   const refresh = useCallback(async () => {
     setError('');
     try {
-      const [dashboard, applications, members, events, wall, clients, guests] = await Promise.all([
-        api.dashboard(), api.list('applications'), api.list('members'), api.list('events'), api.list('wall'), api.list('clients'), api.list('door/guests'),
+      // Keep older deployed API instances usable while the people-profiles
+      // route is being rolled out. The new page can show an empty state until
+      // the matching server version is deployed.
+      const peopleProfilesRequest = api.list('people-profiles').catch((err) => {
+        if (err.status === 404) return [];
+        throw err;
+      });
+      const [dashboard, applications, members, events, siteMedia, peopleProfiles, wall, clients, guests] = await Promise.all([
+        api.dashboard(), api.list('applications'), api.list('members'), api.list('events'), api.list('site-media'), peopleProfilesRequest, api.list('wall'), api.list('clients'), api.list('door/guests'),
       ]);
-      setData({ dashboard, applications, members, events, wall, clients, guests });
+      setData({ dashboard, applications, members, events, siteMedia, peopleProfiles, wall, clients, guests });
     } catch (err) { if (err.status === 401) { setAdmin(null); setAuthError(err.message); } else setError(err.message); }
     finally { setLoading(false); }
   }, []);
@@ -85,7 +94,7 @@ export default function App() {
   const signOut = async (switching = false) => {
     try { await api.logout(); } catch (err) { setToast(`Could not sign out: ${err.message}`); return; }
     setAdmin(null);
-    setData({ applications: [], members: [], events: [], wall: [], clients: [], guests: [], dashboard: {} });
+    setData({ applications: [], members: [], events: [], siteMedia: [], peopleProfiles: [], wall: [], clients: [], guests: [], dashboard: {} });
     setAuthNotice(switching ? 'Signed out. Sign in with the other admin account.' : 'You have signed out.');
     setAuthError('');
     setLoading(false);
@@ -98,6 +107,8 @@ export default function App() {
     applications: <Applications rows={data.applications} query={search} setQuery={setSearch} act={act} />,
     members: <Members rows={data.members} query={search} setQuery={setSearch} />,
     events: <Events rows={data.events} guests={data.guests} act={act} openModal={setModal} />,
+    websiteMedia: <WebsiteMedia rows={data.siteMedia} act={act} />,
+    peopleProfiles: <PeopleProfiles rows={data.peopleProfiles} act={act} />,
     invitations: <Invitations events={data.events} />,
     wall: <Wall rows={data.wall} act={act} />,
     clients: <Clients rows={data.clients} act={act} />,

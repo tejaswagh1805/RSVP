@@ -19,9 +19,20 @@ import {
   verifyPassword,
 } from "./auth.js";
 import { createTicketPdf } from "./ticket-pdf.js";
+import { S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
+const cloudFrontOriginSecret = String(process.env.CLOUDFRONT_ORIGIN_SECRET || "");
+if (cloudFrontOriginSecret) {
+  app.use((req, res, next) => {
+    if (req.get("x-origin-verify") !== cloudFrontOriginSecret)
+      return res.status(403).send("Forbidden");
+    next();
+  });
+}
 const databaseUrl = String(process.env.DATABASE_URL || "").trim();
 const sql =
   databaseUrl && !/USER:PASSWORD|@HOST\/DBNAME/i.test(databaseUrl)
@@ -37,6 +48,13 @@ const now = () =>
     minute: "2-digit",
   });
 const sessionLifetime = 7 * 24 * 60 * 60 * 1000;
+const mediaBucket = String(process.env.S3_MEDIA_BUCKET || "").trim();
+const mediaRegion = String(process.env.S3_MEDIA_REGION || process.env.AWS_REGION || "eu-north-1").trim();
+const mediaBaseUrl = String(process.env.S3_MEDIA_BASE_URL || (mediaBucket ? `https://${mediaBucket}.s3.${mediaRegion}.amazonaws.com` : "")).replace(/\/$/, "");
+const s3Credentials = process.env.S3_AWS_ACCESS_KEY_ID && process.env.S3_AWS_SECRET_ACCESS_KEY
+  ? { accessKeyId: process.env.S3_AWS_ACCESS_KEY_ID, secretAccessKey: process.env.S3_AWS_SECRET_ACCESS_KEY }
+  : undefined;
+const s3 = mediaBucket ? new S3Client({ region: mediaRegion, ...(s3Credentials ? { credentials: s3Credentials } : {}) }) : null;
 const demoSessions = new Map();
 const dashboardTrack = {
   influencer: "Creators",
@@ -436,6 +454,8 @@ const demo = {
     },
   ],
   guestInvitations: [],
+  site_media: [],
+  people_profiles: [],
 };
 
 const tableFor = {
@@ -443,6 +463,8 @@ const tableFor = {
   members: "members",
   events: "events",
   wall: "wall_posts",
+  "site-media": "site_media",
+  "people-profiles": "people_profiles",
   clients: "clients",
   guests: "guests",
 };
@@ -455,6 +477,10 @@ const selectFor = {
     'SELECT id, title, brand, venue, date::text AS date, time, area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", status FROM events ORDER BY date',
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
+  site_media:
+    'SELECT id, slot, title, caption, image_url AS "imageUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM site_media ORDER BY slot, display_order, created_at DESC',
+  people_profiles:
+    'SELECT id, category, name, role, bio, image_url AS "imageUrl", object_key AS "objectKey", instagram_url AS "instagramUrl", tiktok_url AS "tiktokUrl", youtube_url AS "youtubeUrl", x_url AS "xUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM people_profiles ORDER BY category, display_order, created_at DESC',
   clients:
     "SELECT id, name, package, credits, events, status FROM clients ORDER BY name",
   guests:
@@ -539,8 +565,8 @@ async function sendInfobipWhatsAppPayment(to, checkoutUrl, event, guestName, amo
     "\nTap Pay now to complete secure payment. Your PDF ticket will be sent to this chat after payment is confirmed.",
   ].filter(Boolean).join("\n");
 
-  const apiHost = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
-  const eventImage = event.imageData ? `${apiHost}/api/events/${encodeURIComponent(event.id)}/image` : "";
+  const apiHost = String(process.env.PUBLIC_API_URL || "https://d1f5sjkm09kt76.cloudfront.net").replace(/\/$/, "");
+  const eventImage = event.imageData?.startsWith?.("https://") ? event.imageData : event.imageData ? `${apiHost}/api/events/${encodeURIComponent(event.id)}/image` : "";
   const response = await fetch(`${base}/whatsapp/1/message/interactive/url-button`, {
     method: "POST",
     headers: { Authorization: `App ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
@@ -578,7 +604,7 @@ async function sendInfobipTicket(to, pdfUrl, filename, caption) {
 async function createStripeCheckout({ requestId, event, amount, currency }) {
   const secret = String(process.env.STRIPE_SECRET_KEY || "").trim();
   if (!secret) throw new Error("Stripe is not configured.");
-  const site = String(process.env.PUBLIC_SITE_URL || "https://rsvp-dxb-customer.onrender.com").replace(/\/$/, "");
+  const site = String(process.env.PUBLIC_SITE_URL || "https://d25iiefhi451d5.cloudfront.net").replace(/\/$/, "");
   const cents = Math.round(Number(amount) * 100);
   if (!Number.isFinite(cents) || cents <= 0) throw new Error("Ticket price must be greater than zero to take payment.");
   const form = new URLSearchParams({
@@ -626,7 +652,9 @@ app.get("/api/events/:id/image", async (req, res, next) => {
   try {
     if (!sql) return res.status(404).end();
     const rows = await sql`SELECT image_data AS "imageData" FROM events WHERE id = ${req.params.id} LIMIT 1`;
-    const match = String(rows[0]?.imageData || "").match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
+    const stored = String(rows[0]?.imageData || "");
+    if (mediaBaseUrl && stored.startsWith(`${mediaBaseUrl}/media/`)) return res.redirect(302, stored);
+    const match = stored.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
     if (!match) return res.status(404).end();
     res.set({ "Content-Type": match[1].toLowerCase(), "Cache-Control": "public, max-age=3600" });
     res.send(Buffer.from(match[2], "base64"));
@@ -673,7 +701,7 @@ app.post("/api/payments/stripe/webhook", async (req, res) => {
     const ticket = rows[0];
     if (!ticket) throw new Error("No matching ticket request for the paid Stripe Checkout session.");
     if (ticket.ticketDeliveredAt) return res.sendStatus(200);
-    const host = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+    const host = String(process.env.PUBLIC_API_URL || "https://d1f5sjkm09kt76.cloudfront.net").replace(/\/$/, "");
     const pdfUrl = `${host}/api/tickets/${ticket.ticketToken}.pdf`;
     await sendInfobipTicket(ticket.phone, pdfUrl, `RSVP-DXB-${ticket.id}.pdf`, `Payment received for ${ticket.eventTitle}. Your ticket is attached.`);
     await sql`UPDATE ticket_requests SET ticket_delivered_at = NOW() WHERE id = ${ticket.id}`;
@@ -711,12 +739,14 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         continue;
       }
       const directEventMatch = input.match(/^rsvpdxb\s+event\s+(.+)$/i);
-      if (!directEventMatch && /^(rsvpdxb(?:\s+events?)?|hi|hello|start|events|ticket|request)$/i.test(input)) {
+      const eventListRequest = /^(?:rsvpdxb\s+)?(?:events?|tickets?|request|hi|hello|start)(?:\s+(?:please|list|available|upcoming|today|tonight|this\s+week|christmas|new\s+year|eid|ramadan|.+\s+events?))?$/i.test(input)
+        || /^(?:rsvpdxb\s+)?event\s+(?:list|available|upcoming|today|tonight|this\s+week|christmas|new\s+year|eid|ramadan)(?:\s+events?)?$/i.test(input);
+      if (eventListRequest) {
         const events = sql
           ? await sql`SELECT id, title, date::text AS date, ticket_price AS "ticketPrice", ticket_currency AS "ticketCurrency" FROM events WHERE status = 'published' AND date >= CURRENT_DATE ORDER BY date LIMIT 10`
           : demo.events.filter((event) => event.status === "published").map((event) => ({ ...event, ticketPrice: event.ticketPrice || 0, ticketCurrency: "AED" })).slice(0, 10);
         if (!events.length) await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB. There are no events open for ticket requests right now.");
-        else await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB! Choose an event to request your ticket:", events);
+        else await sendInfobipWhatsApp(phone, "Welcome to RSVP DXB! Here are the upcoming events. Choose one to request your ticket:", events);
         continue;
       }
       const directEventValue = directEventMatch?.[1].trim() || "";
@@ -747,7 +777,7 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         const checkout = await createStripeCheckout({ requestId: id, event, amount, currency });
         await sql`UPDATE ticket_requests SET status = 'awaiting_payment', stripe_session_id = ${checkout.id} WHERE id = ${id} AND status = 'pending'`;
         const guestName = text(item.contact?.name, 120);
-        const apiHost = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+        const apiHost = String(process.env.PUBLIC_API_URL || "https://d1f5sjkm09kt76.cloudfront.net").replace(/\/$/, "");
         const shortCheckoutUrl = `${apiHost}/api/pay/${encodeURIComponent(id)}`;
         try {
           await sendInfobipWhatsAppPayment(phone, shortCheckoutUrl, event, guestName, amount, currency);
@@ -791,7 +821,7 @@ app.post("/api/ticket-requests/:id/approve", async (req, res, next) => {
     const ticket = rows[0];
     if (!ticket) return res.status(409).json({ error: "Only a pending free ticket request can be approved here. Paid tickets are issued after Stripe confirms payment." });
     if (ticket.ticketDeliveredAt) return res.json({ status: ticket.status, ticketDeliveredAt: ticket.ticketDeliveredAt, message: "Ticket was already sent." });
-    const host = String(process.env.RENDER_EXTERNAL_URL || "https://rsvp-cytl.onrender.com").replace(/\/$/, "");
+    const host = String(process.env.PUBLIC_API_URL || "https://d1f5sjkm09kt76.cloudfront.net").replace(/\/$/, "");
     await sendInfobipTicket(ticket.phone, `${host}/api/tickets/${ticket.ticketToken}.pdf`, `RSVP-DXB-${ticket.id}.pdf`, `Your free ticket for ${ticket.eventTitle} is confirmed.`);
     const delivered = await sql`UPDATE ticket_requests SET ticket_delivered_at = NOW() WHERE id = ${ticket.id} RETURNING ticket_delivered_at AS "ticketDeliveredAt"`;
     res.json({ status: ticket.status, ticketDeliveredAt: delivered[0]?.ticketDeliveredAt, message: "Approved and PDF ticket sent to the guest's WhatsApp." });
@@ -954,6 +984,134 @@ app.use("/api", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+app.post("/api/media/upload-url", async (req, res, next) => {
+  try {
+    if (!s3 || !mediaBaseUrl) return res.status(503).json({ error: "Media storage is not configured." });
+    const filename = text(req.body.filename, 160);
+    const contentType = text(req.body.contentType, 100).toLowerCase();
+    const size = Number(req.body.size);
+    const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" };
+    if (!extensions[contentType]) return res.status(400).json({ error: "Use a JPG, PNG, WebP image or MP4, WebM, MOV video." });
+    const maxBytes = contentType.startsWith("video/") ? 100 * 1024 * 1024 : 12 * 1024 * 1024;
+    if (!Number.isInteger(size) || size <= 0 || size > maxBytes) return res.status(400).json({ error: `File must be smaller than ${contentType.startsWith("video/") ? "100 MB" : "12 MB"}.` });
+    const safeName = filename.normalize("NFKD").replace(/[^a-zA-Z0-9._-]/g, "-").slice(-100) || `upload.${extensions[contentType]}`;
+    // S3 has a flat keyspace; omit date prefixes so uploads appear directly in media/.
+    const key = `media/${crypto.randomUUID()}-${safeName}`;
+    const uploadUrl = await getSignedUrl(s3, new PutObjectCommand({ Bucket: mediaBucket, Key: key, ContentType: contentType, CacheControl: "public, max-age=31536000, immutable" }), { expiresIn: 300 });
+    res.json({ uploadUrl, key, publicUrl: `${mediaBaseUrl}/${key}`, contentType, maxBytes });
+  } catch (error) { next(error); }
+});
+app.post("/api/site-media", async (req, res, next) => {
+  try {
+    const slot = req.body.slot === "top_pick" ? "top_pick" : req.body.slot === "gallery" ? "gallery" : "";
+    const title = text(req.body.title, 180);
+    const caption = text(req.body.caption, 500);
+    const imageUrl = String(req.body.imageUrl || "");
+    const objectKey = String(req.body.objectKey || "");
+    const linkUrl = text(req.body.linkUrl, 500);
+    if (!slot || !title || !mediaBaseUrl || !objectKey.startsWith("media/") || imageUrl !== `${mediaBaseUrl}/${objectKey}`) {
+      return res.status(400).json({ error: "Choose a section, title and valid RSVP media upload." });
+    }
+    if (linkUrl) {
+      try { if (!["http:", "https:"].includes(new URL(linkUrl).protocol)) throw new Error(); }
+      catch { return res.status(400).json({ error: "Link must use http:// or https://." }); }
+    }
+    const id = `site-media-${crypto.randomUUID()}`;
+    const displayOrder = Math.max(0, Math.min(9999, Number(req.body.displayOrder) || 0));
+    const item = { id, slot, title, caption, imageUrl, objectKey, linkUrl, displayOrder, active: true };
+    if (sql) await sql`INSERT INTO site_media (id, slot, title, caption, image_url, object_key, link_url, display_order) VALUES (${id}, ${slot}, ${title}, ${caption}, ${imageUrl}, ${objectKey}, ${linkUrl}, ${displayOrder})`;
+    else demo.site_media.unshift(item);
+    res.status(201).json(item);
+  } catch (error) { next(error); }
+});
+app.patch("/api/site-media/:id", async (req, res, next) => {
+  try {
+    const active = Boolean(req.body.active);
+    if (sql) {
+      const rows = await sql`UPDATE site_media SET active = ${active} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
+      if (!rows[0]) return res.status(404).json({ error: "Website media item not found." });
+      return res.json(rows[0]);
+    }
+    const item = demo.site_media.find((row) => row.id === req.params.id);
+    if (!item) return res.status(404).json({ error: "Website media item not found." });
+    item.active = active;
+    res.json(item);
+  } catch (error) { next(error); }
+});
+app.post("/api/people-profiles", async (req, res, next) => {
+  try {
+    const category = ["artist", "influencer"].includes(req.body.category) ? req.body.category : "";
+    const name = text(req.body.name, 140);
+    const role = text(req.body.role, 180);
+    const bio = text(req.body.bio, 1000);
+    const imageUrl = String(req.body.imageUrl || "");
+    const objectKey = String(req.body.objectKey || "");
+    const social = {
+      instagramUrl: text(req.body.instagramUrl, 500),
+      tiktokUrl: text(req.body.tiktokUrl, 500),
+      youtubeUrl: text(req.body.youtubeUrl, 500),
+      xUrl: text(req.body.xUrl, 500),
+    };
+    if (!category || !name || !role || !mediaBaseUrl || !objectKey.startsWith("media/") || imageUrl !== `${mediaBaseUrl}/${objectKey}`) {
+      return res.status(400).json({ error: "Choose a profile type, name, role and valid uploaded image." });
+    }
+    for (const value of Object.values(social)) {
+      if (!value) continue;
+      try { if (!["http:", "https:"].includes(new URL(value).protocol)) throw new Error(); }
+      catch { return res.status(400).json({ error: "Social profile links must start with http:// or https://." }); }
+    }
+    const id = `person-${crypto.randomUUID()}`;
+    const item = { id, category, name, role, bio, imageUrl, objectKey, ...social, displayOrder: 0, active: true };
+    if (sql) await sql`INSERT INTO people_profiles (id, category, name, role, bio, image_url, object_key, instagram_url, tiktok_url, youtube_url, x_url) VALUES (${id}, ${category}, ${name}, ${role}, ${bio}, ${imageUrl}, ${objectKey}, ${social.instagramUrl}, ${social.tiktokUrl}, ${social.youtubeUrl}, ${social.xUrl})`;
+    else demo.people_profiles.unshift(item);
+    res.status(201).json(item);
+  } catch (error) { next(error); }
+});
+app.patch("/api/people-profiles/:id", async (req, res, next) => {
+  try {
+    if (typeof req.body.active !== "boolean") {
+      const category = ["artist", "influencer"].includes(req.body.category) ? req.body.category : "";
+      const name = text(req.body.name, 140);
+      const role = text(req.body.role, 180);
+      const bio = text(req.body.bio, 1000);
+      const imageUrl = String(req.body.imageUrl || "");
+      const objectKey = String(req.body.objectKey || "");
+      const social = {
+        instagramUrl: text(req.body.instagramUrl, 500),
+        tiktokUrl: text(req.body.tiktokUrl, 500),
+        youtubeUrl: text(req.body.youtubeUrl, 500),
+        xUrl: text(req.body.xUrl, 500),
+      };
+      if (!category || !name || !role || !mediaBaseUrl || !objectKey.startsWith("media/") || imageUrl !== `${mediaBaseUrl}/${objectKey}`) {
+        return res.status(400).json({ error: "Choose a profile type, name, role and valid uploaded image." });
+      }
+      for (const value of Object.values(social)) {
+        if (!value) continue;
+        try { if (!["http:", "https:"].includes(new URL(value).protocol)) throw new Error(); }
+        catch { return res.status(400).json({ error: "Social profile links must start with http:// or https://." }); }
+      }
+      if (sql) {
+        const rows = await sql`UPDATE people_profiles SET category = ${category}, name = ${name}, role = ${role}, bio = ${bio}, image_url = ${imageUrl}, object_key = ${objectKey}, instagram_url = ${social.instagramUrl}, tiktok_url = ${social.tiktokUrl}, youtube_url = ${social.youtubeUrl}, x_url = ${social.xUrl} WHERE id = ${req.params.id} RETURNING id, category, name, role, bio, image_url AS "imageUrl", object_key AS "objectKey", instagram_url AS "instagramUrl", tiktok_url AS "tiktokUrl", youtube_url AS "youtubeUrl", x_url AS "xUrl", display_order AS "displayOrder", active`;
+        if (!rows[0]) return res.status(404).json({ error: "Profile not found." });
+        return res.json(rows[0]);
+      }
+      const item = demo.people_profiles.find((row) => row.id === req.params.id);
+      if (!item) return res.status(404).json({ error: "Profile not found." });
+      Object.assign(item, { category, name, role, bio, imageUrl, objectKey, ...social });
+      return res.json(item);
+    }
+    const active = req.body.active;
+    if (sql) {
+      const rows = await sql`UPDATE people_profiles SET active = ${active} WHERE id = ${req.params.id} RETURNING id, active`;
+      if (!rows[0]) return res.status(404).json({ error: "Profile not found." });
+      return res.json(rows[0]);
+    }
+    const item = demo.people_profiles.find((row) => row.id === req.params.id);
+    if (!item) return res.status(404).json({ error: "Profile not found." });
+    item.active = active;
+    res.json(item);
+  } catch (error) { next(error); }
 });
 app.get("/api/dashboard", async (_req, res, next) => {
   try {
@@ -1300,6 +1458,7 @@ app.post("/api/events", async (req, res, next) => {
       : [];
     const whoIsInvited = text(req.body.whoIsInvited, 1500);
     const hostNote = text(req.body.hostNote, 1500);
+    const videoUrl = String(req.body.videoUrl || "");
     const imageDataList = Array.isArray(req.body.imageDataList)
       ? req.body.imageDataList.map((value) => String(value || ""))
       : req.body.imageData ? [String(req.body.imageData)] : [];
@@ -1318,12 +1477,12 @@ app.post("/api/events", async (req, res, next) => {
       return res.status(400).json({ error: "Invalid event status." });
     if (
       imageDataList.length > 5 ||
-      imageDataList.some((image) => !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(image)) ||
-      imageDataList.reduce((total, image) => total + image.length, 0) > 2_100_000
+      imageDataList.some((image) => !/^https:\/\//.test(image) || !mediaBaseUrl || !image.startsWith(`${mediaBaseUrl}/media/`))
     )
       return res
         .status(400)
-        .json({ error: "Use up to 5 JPG, PNG or WebP images, 1.5 MB total." });
+        .json({ error: "Choose up to 5 uploaded JPG, PNG or WebP images from the configured RSVP media bucket." });
+    if (videoUrl && (!mediaBaseUrl || !videoUrl.startsWith(`${mediaBaseUrl}/media/`))) return res.status(400).json({ error: "The event video must be uploaded to configured media storage." });
     const id = `event-${crypto.randomUUID()}`;
     const event = {
       id,
@@ -1344,13 +1503,14 @@ app.post("/api/events", async (req, res, next) => {
       included,
       whoIsInvited,
       hostNote,
+      videoUrl,
       imageData,
       imageDataList,
       status,
     };
     if (!sql) demo.events.unshift(event);
     else
-      await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, ticket_price, ticket_currency, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${status})`;
+      await sql`INSERT INTO events (id, title, brand, venue, date, time, area, capacity, confirmed, ticket_price, ticket_currency, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${time}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${status})`;
     res.status(201).json(event);
   } catch (error) {
     next(error);
