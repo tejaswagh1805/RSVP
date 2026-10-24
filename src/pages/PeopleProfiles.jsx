@@ -49,7 +49,12 @@ export default function PeopleProfiles({ rows, act }) {
       }
       const payload = { ...form, name: form.name.trim(), role: form.role.trim(), subtitle: form.subtitle.trim(), bio: form.bio.trim(), imageUrl, objectKey };
       if (editing) {
-        await act(() => api.updatePeopleProfile(editing.id, payload), 'Profile updated on the customer site');
+        await act(
+          () => api.updatePeopleProfile(editing.id, payload),
+          editing.active
+            ? 'Profile updated on the customer site'
+            : 'Profile updated, but it is hidden. Use Show in Published profiles to make it visible to customers.',
+        );
         clearForm(form.category);
       } else {
         await api.createPeopleProfile(payload);
