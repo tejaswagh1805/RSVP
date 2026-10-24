@@ -67,11 +67,44 @@ CREATE TABLE IF NOT EXISTS events (
   image_key TEXT NOT NULL DEFAULT '',
   image_data TEXT NOT NULL DEFAULT '',
   image_gallery TEXT[] NOT NULL DEFAULT '{}',
+  track_capacities JSONB NOT NULL DEFAULT '{}',
+  influencer_deliverables TEXT NOT NULL DEFAULT '',
+  map_url TEXT NOT NULL DEFAULT '',
+  end_date DATE,
+  end_time TEXT NOT NULL DEFAULT '',
+  gates_open_time TEXT NOT NULL DEFAULT '',
   video_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'pending', 'published', 'closed')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE events ADD COLUMN IF NOT EXISTS track_capacities JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS influencer_deliverables TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS map_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS end_date DATE;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS end_time TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS gates_open_time TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS event_rsvp_requests (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  member_email TEXT NOT NULL,
+  track TEXT NOT NULL,
+  guest_names TEXT[] NOT NULL DEFAULT '{}',
+  deliverables_agreed BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'waitlisted', 'declined')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ,
+  reviewed_by TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (event_id, member_id)
+);
+
+CREATE INDEX IF NOT EXISTS event_rsvp_requests_event_status_idx ON event_rsvp_requests(event_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS event_rsvp_requests_member_idx ON event_rsvp_requests(member_id, created_at DESC);
+
 
 CREATE TABLE IF NOT EXISTS wall_posts (
   id TEXT PRIMARY KEY,
@@ -115,6 +148,7 @@ CREATE TABLE IF NOT EXISTS people_profiles (
   active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE people_profiles ADD COLUMN IF NOT EXISTS subtitle TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,

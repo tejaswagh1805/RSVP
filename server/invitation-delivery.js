@@ -99,6 +99,49 @@ export async function sendInvitationEmail({ guestName, email, event, invitationU
   }
 }
 
+export async function sendRsvpDecisionEmail({ name, email, event, track, guestNames = [], deliverables = "", status }) {
+  if (!email) return { status: "skipped", message: "No email address is on this RSVP." };
+  const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim();
+  if (!region || !from) return { status: "not_configured", message: "Email delivery is not configured." };
+
+  const eventDetails = invitationEventDetails(event);
+  const party = [name, ...guestNames].filter(Boolean).join(", ");
+  let subject;
+  let title;
+  let message;
+  if (status === "accepted") {
+    subject = `You're on the list · ${event.title} | RSVP DXB`;
+    title = "You're on the list!";
+    message = `We're delighted to confirm your place at ${event.title}.\n\nDate and time: ${eventDetails}\nYour party: ${party || "You"}${track === "Creators" && deliverables ? `\nCreator reminder: ${deliverables}. Please tag @rsvpdxb and the event handles.` : ""}\n\nPlease show this message at the door. We can't wait to host you.`;
+  } else if (status === "declined") {
+    subject = `An update about ${event.title} | RSVP DXB`;
+    title = "An update about your RSVP";
+    message = `Thank you for your interest in ${event.title}. This event had more requests than available places, and we weren't able to include everyone this time. We'd love to keep you in mind for upcoming RSVP DXB events.`;
+  } else if (status === "waitlisted") {
+    subject = `Your RSVP is waitlisted · ${event.title} | RSVP DXB`;
+    title = "You're on the waitlist";
+    message = `Thank you for your interest in ${event.title}. Your request is on the waitlist. We'll contact you if a place opens.`;
+  } else {
+    return { status: "skipped", message: "This RSVP status does not send a decision email." };
+  }
+  const safeName = htmlEscape(name || "there");
+  const safeTitle = htmlEscape(title);
+  const safeMessage = htmlEscape(message).replaceAll("\n", "<br />");
+  const html = `<!doctype html><html><body style="margin:0;background:#f3e3cb;color:#2e1c10;font-family:Arial,sans-serif"><main style="max-width:560px;margin:32px auto;padding:36px 28px;background:#fbf3e7;border:1px solid #d2b995;border-radius:12px"><p style="color:#86501f;font-size:12px;letter-spacing:2px;text-transform:uppercase">RSVP DXB</p><h1 style="font-size:28px;font-weight:500">${safeTitle}</h1><p>Hello ${safeName},</p><p style="line-height:1.7">${safeMessage}</p><p style="font-size:12px;color:#705238">Warm regards,<br />The RSVP DXB team</p></main></body></html>`;
+  try {
+    const ses = new SESClient({ region });
+    await ses.send(new SendEmailCommand({
+      Source: from,
+      Destination: { ToAddresses: [email] },
+      Message: { Subject: { Charset: "UTF-8", Data: subject }, Body: { Text: { Charset: "UTF-8", Data: `Hello ${name},\n\n${message}\n\nWarm regards,\nThe RSVP DXB team` }, Html: { Charset: "UTF-8", Data: html } } },
+    }));
+    return { status: "submitted", message: "Accepted by Amazon SES; inbox delivery is not confirmed." };
+  } catch (error) {
+    return { status: "failed", message: String(error?.message || "Could not send through Amazon SES.").slice(0, 240) };
+  }
+}
+
 const normalizeWhatsAppNumber = (phone) => {
   let digits = String(phone || "").replace(/\D/g, "");
   if (digits.startsWith("00")) digits = digits.slice(2);

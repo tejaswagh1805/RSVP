@@ -4,7 +4,7 @@ import { api } from '../api.js';
 import { EmptyState, PageIntro } from '../components/UI.jsx';
 
 const SOCIALS = [['instagramUrl', 'Instagram URL'], ['tiktokUrl', 'TikTok URL'], ['youtubeUrl', 'YouTube URL'], ['xUrl', 'X URL']];
-const blankForm = (category = 'artist') => ({ category, name: '', role: '', bio: '', instagramUrl: '', tiktokUrl: '', youtubeUrl: '', xUrl: '' });
+const blankForm = (category = 'artist') => ({ category, name: '', role: '', subtitle: '', bio: '', instagramUrl: '', tiktokUrl: '', youtubeUrl: '', xUrl: '' });
 
 export default function PeopleProfiles({ rows, act }) {
   const [form, setForm] = useState(blankForm());
@@ -30,7 +30,7 @@ export default function PeopleProfiles({ rows, act }) {
   const startEdit = (person) => {
     if (preview) URL.revokeObjectURL(preview);
     setEditing(person);
-    setForm({ category: person.category, name: person.name || '', role: person.role || '', bio: person.bio || '', instagramUrl: person.instagramUrl || '', tiktokUrl: person.tiktokUrl || '', youtubeUrl: person.youtubeUrl || '', xUrl: person.xUrl || '' });
+    setForm({ category: person.category, name: person.name || '', role: person.role || '', subtitle: person.subtitle || '', bio: person.bio || '', instagramUrl: person.instagramUrl || '', tiktokUrl: person.tiktokUrl || '', youtubeUrl: person.youtubeUrl || '', xUrl: person.xUrl || '' });
     setFile(null); setPreview(''); setError('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -47,7 +47,7 @@ export default function PeopleProfiles({ rows, act }) {
         if (!response.ok) throw new Error('Portrait upload to S3 failed.');
         imageUrl = upload.publicUrl; objectKey = upload.key;
       }
-      const payload = { ...form, name: form.name.trim(), role: form.role.trim(), bio: form.bio.trim(), imageUrl, objectKey };
+      const payload = { ...form, name: form.name.trim(), role: form.role.trim(), subtitle: form.subtitle.trim(), bio: form.bio.trim(), imageUrl, objectKey };
       if (editing) {
         await act(() => api.updatePeopleProfile(editing.id, payload), 'Profile updated on the customer site');
         clearForm(form.category);
@@ -67,8 +67,9 @@ export default function PeopleProfiles({ rows, act }) {
           <label className="field"><span>Profile type</span><select value={form.category} onChange={(e) => set('category', e.target.value)}><option value="artist">Artist</option><option value="influencer">Influencer</option></select></label>
           <label className="field"><span>Name *</span><input maxLength={140} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Name shown on the profile" /></label>
           <label className="field"><span>Role or category *</span><input maxLength={180} value={form.role} onChange={(e) => set('role', e.target.value)} placeholder="DJ / Sound & culture" /></label>
+          <label className="field"><span>Subtitle</span><input value={form.subtitle} onChange={(e) => set('subtitle', e.target.value)} placeholder="DJ | Music Producer | Radio Host" /></label>
         </div>
-        <label className="field"><span>Bio</span><textarea rows="3" maxLength={1000} value={form.bio} onChange={(e) => set('bio', e.target.value)} placeholder="Short profile introduction" /></label>
+        <label className="field"><span>Full description</span><textarea rows="10" value={form.bio} onChange={(e) => set('bio', e.target.value)} placeholder="Write the full profile biography" /></label>
         <div className="form-grid">{SOCIALS.map(([key, label]) => <label className="field" key={key}><span>{label}</span><input type="url" maxLength={500} value={form[key]} onChange={(e) => set(key, e.target.value)} placeholder="https://…" /></label>)}</div>
         <label className="field"><span>Portrait (JPG, PNG or WebP, up to 12 MB) {editing ? '(optional; choose a file to replace the current image)' : '*'}</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => { chooseFile(e.target.files?.[0] || null); e.target.value = ''; }} /></label>
         {(preview || (editing && !file)) ? <img src={preview || editing.imageUrl} alt="Portrait preview" style={{ width: 150, height: 180, objectFit: 'cover', borderRadius: 8 }} /> : null}
@@ -77,6 +78,6 @@ export default function PeopleProfiles({ rows, act }) {
       </form>
     </section>
     <PageIntro title="Published profiles" detail="Edit profile details or hide a profile from customer pages without deleting its S3 image." />
-    <div className="panel table-panel table-scroll"><table><thead><tr><th>PHOTO</th><th>TYPE</th><th>NAME</th><th>ROLE</th><th>SOCIAL LINKS</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{rows.map((person) => <tr key={person.id}><td><img src={person.imageUrl} alt="" style={{ width: 54, height: 64, objectFit: 'cover', borderRadius: 5 }} /></td><td>{person.category === 'artist' ? 'Artist' : 'Influencer'}</td><td><strong>{person.name}</strong></td><td>{person.role}</td><td>{[['Instagram', person.instagramUrl], ['TikTok', person.tiktokUrl], ['YouTube', person.youtubeUrl], ['X', person.xUrl]].filter(([, url]) => url).map(([name, url]) => <a key={name} href={url} target="_blank" rel="noreferrer" style={{ marginRight: 8 }}>{name}</a>)}</td><td><span className={`status-tag ${person.active ? 'status-published' : 'status-closed'}`}>{person.active ? 'Active' : 'Hidden'}</span></td><td><div style={{ display: 'flex', gap: 6 }}><button className="small-action" onClick={() => startEdit(person)}><Pencil size={13} /> Edit</button><button className="small-action" onClick={() => act(() => api.setPeopleProfileActive(person.id, !person.active), person.active ? 'Profile hidden' : 'Profile shown')}>{person.active ? <><EyeOff size={13} /> Hide</> : <><Eye size={13} /> Show</>}</button></div></td></tr>)}</tbody></table>{rows.length === 0 ? <EmptyState title="No profiles yet" detail="Add an artist or influencer above." /> : null}</div>
+    <div className="panel table-panel table-scroll"><table><thead><tr><th>PHOTO</th><th>TYPE</th><th>NAME</th><th>ROLE</th><th>SOCIAL LINKS</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{rows.map((person) => <tr key={person.id}><td><img src={person.imageUrl} alt="" style={{ width: 54, height: 64, objectFit: 'cover', borderRadius: 5 }} /></td><td>{person.category === 'artist' ? 'Artist' : 'Influencer'}</td><td><strong>{person.name}</strong>{person.subtitle ? <div style={{ marginTop: 4, color: 'var(--muted)', fontSize: 11 }}>{person.subtitle}</div> : null}</td><td>{person.role}</td><td>{[['Instagram', person.instagramUrl], ['TikTok', person.tiktokUrl], ['YouTube', person.youtubeUrl], ['X', person.xUrl]].filter(([, url]) => url).map(([name, url]) => <a key={name} href={url} target="_blank" rel="noreferrer" style={{ marginRight: 8 }}>{name}</a>)}</td><td><span className={`status-tag ${person.active ? 'status-published' : 'status-closed'}`}>{person.active ? 'Active' : 'Hidden'}</span></td><td><div style={{ display: 'flex', gap: 6 }}><button className="small-action" onClick={() => startEdit(person)}><Pencil size={13} /> Edit</button><button className="small-action" onClick={() => act(() => api.setPeopleProfileActive(person.id, !person.active), person.active ? 'Profile hidden' : 'Profile shown')}>{person.active ? <><EyeOff size={13} /> Hide</> : <><Eye size={13} /> Show</>}</button></div></td></tr>)}</tbody></table>{rows.length === 0 ? <EmptyState title="No profiles yet" detail="Add an artist or influencer above." /> : null}</div>
   </>;
 }
