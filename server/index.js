@@ -458,6 +458,7 @@ const demo = {
   eventRsvpRequests: [],
   site_media: [],
   people_profiles: [],
+  venues: [],
 };
 
 const tableFor = {
@@ -467,6 +468,7 @@ const tableFor = {
   wall: "wall_posts",
   "site-media": "site_media",
   "people-profiles": "people_profiles",
+  venues: "venues",
   clients: "clients",
   guests: "guests",
 };
@@ -483,6 +485,8 @@ const selectFor = {
     'SELECT id, slot, title, caption, image_url AS "imageUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM site_media ORDER BY slot, display_order, created_at DESC',
   people_profiles:
     'SELECT id, category, name, role, subtitle, bio, image_url AS "imageUrl", object_key AS "objectKey", instagram_url AS "instagramUrl", tiktok_url AS "tiktokUrl", youtube_url AS "youtubeUrl", x_url AS "xUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM people_profiles ORDER BY category, display_order, created_at DESC',
+  venues:
+    `SELECT id, slug, category, name, tagline, description, location, highlights, offer, featured_date::text AS "featuredDate", image_url AS "imageUrl", object_key AS "objectKey", website_url AS "websiteUrl", more_info_url AS "moreInfoUrl", display_order AS "displayOrder", content_reviewed AS "contentReviewed", featured, active, created_at AS "createdAt" FROM venues ORDER BY CASE category WHEN 'Our partners' THEN 1 WHEN 'Desi luxe' THEN 2 WHEN 'Dinner to party' THEN 3 WHEN 'Bars & night culture' THEN 4 WHEN 'Coffee' THEN 5 ELSE 6 END, display_order, name`,
   clients:
     "SELECT id, name, package, credits, events, status FROM clients ORDER BY name",
   guests:
@@ -1117,6 +1121,95 @@ app.patch("/api/people-profiles/:id", async (req, res, next) => {
     res.json(item);
   } catch (error) { next(error); }
 });
+const VENUE_CATEGORIES = ["Our partners", "Desi luxe", "Dinner to party", "Bars & night culture", "Coffee", "Daytime & alcohol-free"];
+const venueSlug = (value) => String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function validWebUrl(value) {
+  if (!value) return true;
+  try { return ["http:", "https:"].includes(new URL(value).protocol); } catch { return false; }
+}
+function venuePayload(body = {}) {
+  const category = VENUE_CATEGORIES.includes(body.category) ? body.category : "";
+  const name = text(body.name, 180);
+  const slug = venueSlug(name);
+  const tagline = text(body.tagline, 240);
+  const description = String(body.description || "").trim();
+  const location = text(body.location, 500);
+  const highlights = Array.isArray(body.highlights)
+    ? body.highlights.map((value) => text(value, 240)).filter(Boolean).slice(0, 30)
+    : String(body.highlights || "").split(/\r?\n/).map((value) => text(value, 240)).filter(Boolean).slice(0, 30);
+  const offer = String(body.offer || "").trim();
+  const featuredDate = String(body.featuredDate || "").trim();
+  const imageUrl = String(body.imageUrl || "");
+  const objectKey = String(body.objectKey || "");
+  const websiteUrl = text(body.websiteUrl, 500);
+  const moreInfoUrl = text(body.moreInfoUrl, 500);
+  const displayOrder = Math.max(0, Math.min(9999, Number(body.displayOrder) || 0));
+  if (!category || !name || !slug || !location || !description || !mediaBaseUrl || !objectKey.startsWith("media/") || imageUrl !== `${mediaBaseUrl}/${objectKey}`) {
+    return { error: "Add a category, name, location, description and a valid uploaded venue image." };
+  }
+  if (featuredDate && !/^\d{4}-\d{2}-\d{2}$/.test(featuredDate)) return { error: "Featured date must be a valid date." };
+  if (![websiteUrl, moreInfoUrl].every(validWebUrl)) return { error: "Website and More info links must start with http:// or https://." };
+  const contentReviewed = Boolean(body.contentReviewed);
+  return { value: { category, name, slug, tagline, description, location, highlights, offer, featuredDate: featuredDate || null, imageUrl, objectKey, websiteUrl, moreInfoUrl, displayOrder, contentReviewed, featured: Boolean(body.featured) && contentReviewed } };
+}
+app.post("/api/venues", async (req, res, next) => {
+  try {
+    const parsed = venuePayload(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const id = `venue-${crypto.randomUUID()}`;
+    const item = { id, ...parsed.value, active: parsed.value.contentReviewed };
+    if (sql) {
+      const v = parsed.value;
+      const rows = await sql`INSERT INTO venues (id, slug, category, name, tagline, description, location, highlights, offer, featured_date, image_url, object_key, website_url, more_info_url, display_order, content_reviewed, featured, active) VALUES (${id}, ${v.slug}, ${v.category}, ${v.name}, ${v.tagline}, ${v.description}, ${v.location}, ${v.highlights}, ${v.offer}, ${v.featuredDate}, ${v.imageUrl}, ${v.objectKey}, ${v.websiteUrl}, ${v.moreInfoUrl}, ${v.displayOrder}, ${v.contentReviewed}, ${v.featured}, ${item.active}) RETURNING id, slug, category, name, tagline, description, location, highlights, offer, featured_date::text AS "featuredDate", image_url AS "imageUrl", object_key AS "objectKey", website_url AS "websiteUrl", more_info_url AS "moreInfoUrl", display_order AS "displayOrder", content_reviewed AS "contentReviewed", featured, active`;
+      return res.status(201).json(rows[0]);
+    }
+    demo.venues.unshift(item);
+    res.status(201).json(item);
+  } catch (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "A venue with that name already exists. Use a distinct name to keep its page URL unique." });
+    next(error);
+  }
+});
+app.patch("/api/venues/:id", async (req, res, next) => {
+  try {
+    const statusOnlyUpdate = Object.keys(req.body).length === 1 && (typeof req.body.active === "boolean" || typeof req.body.featured === "boolean");
+    if (statusOnlyUpdate) {
+      const active = typeof req.body.active === "boolean" ? req.body.active : undefined;
+      const featured = typeof req.body.featured === "boolean" ? req.body.featured : undefined;
+      if (sql) {
+        const current = (await sql`SELECT content_reviewed AS "contentReviewed", active FROM venues WHERE id = ${req.params.id} LIMIT 1`)[0];
+        if (!current) return res.status(404).json({ error: "Venue not found." });
+        if ((active === true || featured === true) && !current.contentReviewed) return res.status(400).json({ error: "Confirm the venue details, current offer, approved image and sign-off before publishing." });
+        if (featured === true && !current.active) return res.status(400).json({ error: "Publish the venue before featuring it on the homepage." });
+        const rows = await sql`UPDATE venues SET active = COALESCE(${active ?? null}, active), featured = COALESCE(${featured ?? null}, featured), updated_at = NOW() WHERE id = ${req.params.id} RETURNING id, active, featured`;
+        if (!rows[0]) return res.status(404).json({ error: "Venue not found." });
+        return res.json(rows[0]);
+      }
+      const item = demo.venues.find((venue) => venue.id === req.params.id);
+      if (!item) return res.status(404).json({ error: "Venue not found." });
+      if ((active === true || featured === true) && !item.contentReviewed) return res.status(400).json({ error: "Confirm the venue details, current offer, approved image and sign-off before publishing." });
+      if (featured === true && !item.active) return res.status(400).json({ error: "Publish the venue before featuring it on the homepage." });
+      if (active !== undefined) item.active = active;
+      if (featured !== undefined) item.featured = featured;
+      return res.json(item);
+    }
+    const parsed = venuePayload(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const v = parsed.value;
+    if (sql) {
+      const rows = await sql`UPDATE venues SET slug = ${v.slug}, category = ${v.category}, name = ${v.name}, tagline = ${v.tagline}, description = ${v.description}, location = ${v.location}, highlights = ${v.highlights}, offer = ${v.offer}, featured_date = ${v.featuredDate}, image_url = ${v.imageUrl}, object_key = ${v.objectKey}, website_url = ${v.websiteUrl}, more_info_url = ${v.moreInfoUrl}, display_order = ${v.displayOrder}, content_reviewed = ${v.contentReviewed}, active = CASE WHEN ${v.contentReviewed} THEN active ELSE FALSE END, featured = CASE WHEN ${v.contentReviewed} THEN ${v.featured} ELSE FALSE END, updated_at = NOW() WHERE id = ${req.params.id} RETURNING id, slug, category, name, tagline, description, location, highlights, offer, featured_date::text AS "featuredDate", image_url AS "imageUrl", object_key AS "objectKey", website_url AS "websiteUrl", more_info_url AS "moreInfoUrl", display_order AS "displayOrder", content_reviewed AS "contentReviewed", featured, active`;
+      if (!rows[0]) return res.status(404).json({ error: "Venue not found." });
+      return res.json(rows[0]);
+    }
+    const item = demo.venues.find((venue) => venue.id === req.params.id);
+    if (!item) return res.status(404).json({ error: "Venue not found." });
+    Object.assign(item, v, { active: v.contentReviewed ? item.active : false, featured: v.contentReviewed ? v.featured : false });
+    res.json(item);
+  } catch (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "A venue with that name already exists. Use a distinct name to keep its page URL unique." });
+    next(error);
+  }
+});
 app.get("/api/dashboard", async (_req, res, next) => {
   try {
     if (sql) {
@@ -1175,6 +1268,7 @@ for (const [resource, table] of Object.entries(tableFor))
           : demo.guestInvitations.map(({ tokenHash: _tokenHash, guestName, ...guest }) => ({ ...guest, name: guestName, track: "Invited guest", isInvitation: true }));
         res.json([...rows, ...invitations]);
       } catch (error) {
+        if (table === "venues" && error.message?.toLowerCase().includes("venues") && error.message?.toLowerCase().includes("does not exist")) return res.json([]);
         next(error);
       }
     },

@@ -150,6 +150,30 @@ CREATE TABLE IF NOT EXISTS people_profiles (
 );
 ALTER TABLE people_profiles ADD COLUMN IF NOT EXISTS subtitle TEXT NOT NULL DEFAULT '';
 
+CREATE TABLE IF NOT EXISTS venues (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  category TEXT NOT NULL CHECK (category IN ('Our partners', 'Desi luxe', 'Dinner to party', 'Bars & night culture', 'Coffee', 'Daytime & alcohol-free')),
+  name TEXT NOT NULL,
+  tagline TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  highlights TEXT[] NOT NULL DEFAULT '{}',
+  offer TEXT NOT NULL DEFAULT '',
+  featured_date DATE,
+  image_url TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  website_url TEXT NOT NULL DEFAULT '',
+  more_info_url TEXT NOT NULL DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  content_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
+  featured BOOLEAN NOT NULL DEFAULT FALSE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS venues_category_order_idx ON venues (category, active, display_order, name);
+
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
