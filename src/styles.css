@@ -235,6 +235,9 @@ td strong { color: #dedbd3; font-size: 10px; font-weight: 500; }
 .table-subline { display: block; margin-top: 4px; color: #77766f; font-size: 9px; }
 .small-action { display: inline-flex; align-items: center; gap: 4px; padding: 6px 8px; border: 1px solid #35352e; border-radius: 4px; background: #1c1c19; color: #bdbab0; font-size: 9px; cursor: pointer; }
 .small-action:hover { border-color: #68583a; color: #e1c58b; }
+.small-action.delete-action { border-color: #62403a; color: #d7a095; }
+.small-action.delete-action:hover:not(:disabled) { border-color: #b45b4e; background: #321d1a; color: #ffd1c8; }
+.small-action:disabled { cursor: not-allowed; opacity: .55; }
 .publish-action { border-color: #31503b; color: #a2caaa; }
 .wall-list { display: grid; gap: 10px; }
 .wall-card { display: flex; align-items: flex-start; gap: 12px; padding: 15px; }

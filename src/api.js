@@ -34,6 +34,7 @@ export const api = {
   updatePeopleProfile: (id, profile) => request(`/people-profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(profile) }),
   setPeopleProfileActive: (id, active) => request(`/people-profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ active }) }),
   updateEvent: (id, update) => request(`/events/${id}`, { method: 'PATCH', body: JSON.stringify(typeof update === 'string' ? { status: update } : update) }),
+  deleteEvent: (id) => request(`/events/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   approveTicketRequest: (id) => request(`/ticket-requests/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   moderatePost: (id, action) => request(`/wall/${id}`, { method: 'PATCH', body: JSON.stringify({ action }) }),
   addCredits: (id, amount) => request(`/clients/${id}/credits`, { method: 'POST', body: JSON.stringify({ amount }) }),

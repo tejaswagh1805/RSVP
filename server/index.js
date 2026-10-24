@@ -1777,6 +1777,39 @@ app.patch("/api/events/:id", async (req, res, next) => {
   }
 });
 
+app.delete("/api/events/:id", async (req, res, next) => {
+  try {
+    const eventId = text(req.params.id, 180);
+    if (!eventId) return res.status(400).json({ error: "Choose an event to delete." });
+
+    if (!sql) {
+      const index = demo.events.findIndex((event) => event.id === eventId);
+      if (index < 0) return res.status(404).json({ error: "Event not found." });
+      const [deleted] = demo.events.splice(index, 1);
+      demo.guests.forEach((guest) => { if (guest.eventId === eventId) guest.eventId = null; });
+      demo.wall.forEach((post) => { if (post.eventId === eventId) post.eventId = null; });
+      demo.guestInvitations = demo.guestInvitations.filter((item) => item.eventId !== eventId);
+      demo.eventRsvpRequests = demo.eventRsvpRequests.filter((item) => item.eventId !== eventId);
+      return res.json({ ok: true, id: deleted.id, title: deleted.title });
+    }
+
+    const paidTicket = (await sql`
+      SELECT id FROM ticket_requests
+      WHERE event_id = ${eventId} AND (status IN ('paid', 'approved') OR paid_at IS NOT NULL)
+      LIMIT 1
+    `)[0];
+    if (paidTicket) {
+      return res.status(409).json({ error: "This event has paid or issued tickets and cannot be deleted. Close RSVPs to remove it from listings while preserving ticket records." });
+    }
+
+    const rows = await sql`DELETE FROM events WHERE id = ${eventId} RETURNING id, title`;
+    if (!rows[0]) return res.status(404).json({ error: "Event not found." });
+    res.json({ ok: true, ...rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/wall/:id", async (req, res, next) => {
   try {
     const { action } = req.body;
