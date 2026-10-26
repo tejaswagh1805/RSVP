@@ -25,14 +25,79 @@ if (!admin.name || !admin.email || !admin.password || admin.password.length < 12
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sql = neon(databaseUrl);
+function splitSqlStatements(source) {
+  const statements = [];
+  let current = '';
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    const next = source[i + 1];
+    if (lineComment) {
+      current += char;
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      current += char;
+      if (char === '*' && next === '/') { current += next; i += 1; blockComment = false; }
+      continue;
+    }
+    if (quote) {
+      current += char;
+      if (char === quote) {
+        if (next === quote) { current += next; i += 1; }
+        else quote = null;
+      } else if (char === '\\' && next) { current += next; i += 1; }
+      continue;
+    }
+    if (char === '-' && next === '-') { current += char + next; i += 1; lineComment = true; continue; }
+    if (char === '/' && next === '*') { current += char + next; i += 1; blockComment = true; continue; }
+    if (char === "'" || char === '"') { quote = char; current += char; continue; }
+    if (char === ';') {
+      if (current.trim()) statements.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (quote) throw new Error('Unterminated quoted string or identifier in SQL file.');
+  if (blockComment) throw new Error('Unterminated block comment in SQL file.');
+  if (current.trim()) statements.push(current.trim());
+  return statements;
+}
+
 const schema = await readFile(path.join(root, 'server/schema.sql'), 'utf8');
-for (const statement of schema.split(';').map((value) => value.trim()).filter(Boolean)) {
-  await sql.query(statement);
+async function runQuery(query) {
+  try {
+    return await query();
+  } catch (error) {
+    const cause = error?.sourceError?.cause || error?.cause;
+    const transient = cause?.code === 'UND_ERR_CONNECT_TIMEOUT' || cause?.code === 'ECONNRESET' || cause?.code === 'ETIMEDOUT' || /fetch failed/i.test(error?.message || '');
+    if (transient) {
+      console.warn('Neon connection timed out; retrying once in 2 seconds...');
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      try { return await query(); }
+      catch (retryError) {
+        const retryCause = retryError?.sourceError?.cause || retryError?.cause;
+        if (retryCause?.code === 'UND_ERR_CONNECT_TIMEOUT' || retryCause?.code === 'ECONNRESET' || retryCause?.code === 'ETIMEDOUT' || /fetch failed/i.test(retryError?.message || '')) {
+          console.error('Could not connect to Neon after retry. Check that outbound HTTPS to your Neon host is allowed by your network/firewall, then confirm the Neon project is active. If your company requires a proxy, configure a reachable proxy instead of the current placeholder. No schema setup completed.');
+          process.exit(1);
+        }
+        throw retryError;
+      }
+    }
+    throw error;
+  }
+}
+for (const statement of splitSqlStatements(schema)) {
+  await runQuery(() => sql.query(statement));
 }
 const seed = await readFile(path.join(root, 'server/seed.sql'), 'utf8');
-for (const statement of seed.split(';').map((value) => value.trim()).filter(Boolean)) {
-  await sql.query(statement);
+for (const statement of splitSqlStatements(seed)) {
+  await runQuery(() => sql.query(statement));
 }
 const passwordHash = await hashPassword(admin.password);
-await sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`;
+await runQuery(() => sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`);
 console.log('Neon schema, prototype records, and the admin account are ready.');

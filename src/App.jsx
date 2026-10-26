@@ -47,10 +47,10 @@ export default function App() {
         if (err.status === 404) return [];
         throw err;
       });
-      const [dashboard, applications, members, events, siteMedia, peopleProfiles, venues, wall, clients, guests] = await Promise.all([
+      const [dashboard, applications, members, fetchedEvents, siteMedia, peopleProfiles, venues, wall, clients, guests] = await Promise.all([
         api.dashboard(), api.list('applications'), api.list('members'), api.list('events'), api.list('site-media'), peopleProfilesRequest, venuesRequest, api.list('wall'), api.list('clients'), api.list('door/guests'),
       ]);
-      setData({ dashboard, applications, members, events, siteMedia, peopleProfiles, venues, wall, clients, guests });
+      setData({ dashboard, applications, members, events: fetchedEvents, siteMedia, peopleProfiles, venues, wall, clients, guests });
     } catch (err) { if (err.status === 401) { setAdmin(null); setAuthError(err.message); } else setError(err.message); }
     finally { setLoading(false); }
   }, []);
@@ -111,14 +111,14 @@ export default function App() {
     dashboard: <Dashboard data={data} navigate={navigate} />,
     applications: <Applications rows={data.applications} query={search} setQuery={setSearch} act={act} />,
     members: <Members rows={data.members} query={search} setQuery={setSearch} act={act} />,
-    events: <Events rows={data.events} guests={data.guests} act={act} openModal={setModal} />,
+      events: <Events rows={data.events} guests={data.guests} act={act} openModal={setModal} />,
     websiteMedia: <WebsiteMedia rows={data.siteMedia} act={act} />,
     peopleProfiles: <PeopleProfiles rows={data.peopleProfiles} act={act} />,
     venues: <Venues rows={data.venues} act={act} />,
     invitations: <Invitations events={data.events} />,
     wall: <Wall rows={data.wall} act={act} />,
     clients: <Clients rows={data.clients} act={act} />,
-    door: <Door guests={data.guests} events={data.events} act={act} />,
+      door: <Door guests={data.guests} events={data.events} act={act} />,
   };
 
   if (location.pathname.replace(/\/$/, '') === '/register') return <Register />;
@@ -137,6 +137,7 @@ export default function App() {
       </div>
     </main>
     {modal?.type === 'create-event' && <EventModal close={() => setModal(null)} act={act} />}
+    {modal?.type === 'edit-event' && <EventModal event={modal.event} close={() => setModal(null)} act={act} />}
     {modal?.type === 'guest-list' && <GuestModal event={modal.event} guests={data.guests} close={() => setModal(null)} />}
     {toast && <div className="toast"><CheckCheck size={16} />{toast}<button onClick={() => setToast('')}><X size={14} /></button></div>}
   </div>;

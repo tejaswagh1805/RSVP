@@ -481,7 +481,7 @@ const selectFor = {
   members:
     'SELECT id, name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
   events:
-    'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", ticket_url AS \"ticketUrl\", reservation_phone AS \"reservationPhone\", creator_pass_note AS \"creatorPassNote\", age_restriction AS \"ageRestriction\", hashtag, application_deadline::text AS \"applicationDeadline\", action_label AS \"actionLabel\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
+    'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", ticket_url AS \"ticketUrl\", reservation_phone AS \"reservationPhone\", creator_pass_note AS \"creatorPassNote\", age_restriction AS \"ageRestriction\", hashtag, application_deadline::text AS \"applicationDeadline\", action_label AS \"actionLabel\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", COALESCE(image_gallery[1], image_data) AS \"imageData\", image_gallery AS \"imageGallery\", video_url AS \"videoUrl\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   site_media:
@@ -660,7 +660,7 @@ app.get("/api/health", (_req, res) =>
 app.get("/api/events/:id/image", async (req, res, next) => {
   try {
     if (!sql) return res.status(404).end();
-    const rows = await sql`SELECT image_data AS "imageData" FROM events WHERE id = ${req.params.id} LIMIT 1`;
+    const rows = await sql`SELECT COALESCE(image_gallery[1], image_data) AS "imageData" FROM events WHERE id = ${req.params.id} LIMIT 1`;
     const stored = String(rows[0]?.imageData || "");
     if (mediaBaseUrl && stored.startsWith(`${mediaBaseUrl}/media/`)) return res.redirect(302, stored);
     const match = stored.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
@@ -1972,7 +1972,7 @@ app.post("/api/events", async (req, res, next) => {
     if (ticketUrl && !/^https:\/\//i.test(ticketUrl)) return res.status(400).json({ error: "Use a secure HTTPS ticket link." });
     if (
       imageDataList.length > 5 ||
-      imageDataList.some((image) => !/^https:\/\//.test(image) || !mediaBaseUrl || !image.startsWith(`${mediaBaseUrl}/media/`))
+      imageDataList.some((image) => !/^https:\/\//.test(image) || (mediaBaseUrl && !image.startsWith(`${mediaBaseUrl}/media/`)))
     )
       return res
         .status(400)
@@ -2028,6 +2028,68 @@ app.post("/api/events", async (req, res, next) => {
 });
 app.patch("/api/events/:id", async (req, res, next) => {
   try {
+    if (Object.hasOwn(req.body, "title")) {
+      const id = text(req.params.id, 180);
+      const title = text(req.body.title, 180);
+      const brand = text(req.body.brand, 180);
+      const venue = text(req.body.venue, 240);
+      const area = text(req.body.area, 120);
+      const date = text(req.body.date, 10);
+      const endDate = text(req.body.endDate, 10);
+      const time = text(req.body.time, 40);
+      const endTime = text(req.body.endTime, 40);
+      const gatesOpenTime = text(req.body.gatesOpenTime, 40);
+      const ticketUrl = text(req.body.ticketUrl, 1000);
+      const reservationPhone = text(req.body.reservationPhone, 80);
+      const creatorPassNote = text(req.body.creatorPassNote, 500);
+      const ageRestriction = text(req.body.ageRestriction, 80);
+      const hashtag = text(req.body.hashtag, 120);
+      const applicationDeadline = text(req.body.applicationDeadline, 10);
+      const actionLabel = text(req.body.actionLabel, 60);
+      const category = text(req.body.category, 80) || "Other";
+      const capacity = Number(req.body.capacity);
+      const ticketPrice = Number(req.body.ticketPrice);
+      const ticketCurrency = text(req.body.ticketCurrency, 3).toUpperCase() || "AED";
+      const tracks = Array.isArray(req.body.tracks)
+        ? [...new Set(req.body.tracks.map((item) => text(item, 40)).filter((item) => ["Media", "Creators", "Tastemakers", "Private Circle"].includes(item)))]
+        : [];
+      const rawTrackCapacities = req.body.trackCapacities && typeof req.body.trackCapacities === "object" ? req.body.trackCapacities : {};
+      const trackCapacities = Object.fromEntries(tracks.map((track) => {
+        const spots = Number(rawTrackCapacities[track] ?? capacity);
+        return [track, Number.isInteger(spots) && spots > 0 ? Math.min(spots, capacity) : capacity];
+      }));
+      const influencerDeliverables = text(req.body.influencerDeliverables, 5000);
+      const mapUrl = text(req.body.mapUrl, 1000);
+      const dressCode = text(req.body.dressCode, 180);
+      const about = text(req.body.about, 5000);
+      const included = Array.isArray(req.body.included) ? req.body.included.map((item) => text(item, 300)).filter(Boolean).slice(0, 30) : [];
+      const whoIsInvited = text(req.body.whoIsInvited, 1500);
+      const hostNote = text(req.body.hostNote, 1500);
+      const videoUrl = text(req.body.videoUrl, 1000);
+      const imageDataList = Array.isArray(req.body.imageDataList) ? req.body.imageDataList.map((image) => String(image || "")) : [];
+      const imageData = imageDataList[0] || "";
+      const status = String(req.body.status || "draft");
+      if (!id || !title || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Event title and a valid date are required." });
+      if (endDate && (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < date)) return res.status(400).json({ error: "Enter an event end date on or after the event date." });
+      if (applicationDeadline && (!/^\d{4}-\d{2}-\d{2}$/.test(applicationDeadline) || applicationDeadline > date)) return res.status(400).json({ error: "Enter a valid application deadline on or before the event date." });
+      if (!Number.isInteger(capacity) || capacity < (tracks.length ? 1 : 0) || capacity > 100000) return res.status(400).json({ error: "Enter a valid RSVP capacity for the selected tracks." });
+      if (tracks.some((track) => !Number.isInteger(Number(rawTrackCapacities[track] ?? capacity)) || Number(rawTrackCapacities[track] ?? capacity) < 1)) return res.status(400).json({ error: "Every invited track needs a positive RSVP capacity." });
+      if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency)) return res.status(400).json({ error: "Enter a valid ticket price and currency." });
+      if (ticketUrl && !/^https:\/\//i.test(ticketUrl)) return res.status(400).json({ error: "Use a secure HTTPS ticket link." });
+      if (mapUrl && !/^https:\/\//i.test(mapUrl)) return res.status(400).json({ error: "Use a secure HTTPS map link." });
+      if (!["draft", "published", "pending", "closed"].includes(status)) return res.status(400).json({ error: "Invalid event status." });
+      if (imageDataList.length > 5 || imageDataList.some((image) => !/^https:\/\//.test(image) || (mediaBaseUrl && !image.startsWith(`${mediaBaseUrl}/media/`)))) return res.status(400).json({ error: "Choose up to 5 HTTPS event images from the configured media storage." });
+      if (videoUrl && (!mediaBaseUrl || !videoUrl.startsWith(`${mediaBaseUrl}/media/`))) return res.status(400).json({ error: "The event video must be uploaded to configured media storage." });
+      if (!sql) {
+        const event = demo.events.find((row) => row.id === id);
+        if (!event) return res.status(404).json({ error: "Event not found." });
+        Object.assign(event, { title, brand, venue, area, date, endDate, time, endTime, gatesOpenTime, ticketUrl, reservationPhone, creatorPassNote, ageRestriction, hashtag, applicationDeadline, actionLabel, capacity, ticketPrice, ticketCurrency, category, tracks, trackCapacities, influencerDeliverables, mapUrl, dressCode, about, included, whoIsInvited, hostNote, videoUrl, imageData, imageDataList, status });
+        return res.json(event);
+      }
+      const rows = await sql`UPDATE events SET title = ${title}, brand = ${brand}, venue = ${venue}, area = ${area}, date = ${date}, end_date = ${endDate || null}, time = ${time}, end_time = ${endTime}, gates_open_time = ${gatesOpenTime}, ticket_url = ${ticketUrl}, reservation_phone = ${reservationPhone}, creator_pass_note = ${creatorPassNote}, age_restriction = ${ageRestriction}, hashtag = ${hashtag}, application_deadline = ${applicationDeadline || null}, action_label = ${actionLabel}, capacity = ${capacity}, ticket_price = ${ticketPrice}, ticket_currency = ${ticketCurrency}, category = ${category}, tracks = ${tracks}, track_capacities = ${JSON.stringify(trackCapacities)}::jsonb, influencer_deliverables = ${influencerDeliverables}, map_url = ${mapUrl}, dress_code = ${dressCode}, about = ${about}, included = ${included}, who_is_invited = ${whoIsInvited}, host_note = ${hostNote}, video_url = ${videoUrl}, image_data = ${imageData}, image_gallery = ${imageDataList}, status = ${status}, updated_at = NOW() WHERE id = ${id} RETURNING *`;
+      if (!rows[0]) return res.status(404).json({ error: "Event not found." });
+      return res.json(rows[0]);
+    }
     const { status } = req.body;
     const hasPriceUpdate = Object.hasOwn(req.body, "ticketPrice") || Object.hasOwn(req.body, "ticketCurrency");
     if (hasPriceUpdate) {
