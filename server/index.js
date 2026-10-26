@@ -4,7 +4,8 @@ import cors from "cors";
 import { neon } from "@neondatabase/serverless";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import {
   sendInvitationEmail,
   sendInvitationWhatsApp,
@@ -49,6 +50,8 @@ const now = () =>
     minute: "2-digit",
   });
 const sessionLifetime = 7 * 24 * 60 * 60 * 1000;
+const mobileSessionLifetimeSeconds = 60 * 60 * 24 * 30;
+const scrypt = promisify(scryptCallback);
 const mediaBucket = String(process.env.S3_MEDIA_BUCKET || "").trim();
 const mediaRegion = String(process.env.S3_MEDIA_REGION || process.env.AWS_REGION || "eu-north-1").trim();
 const mediaBaseUrl = String(process.env.S3_MEDIA_BASE_URL || (mediaBucket ? `https://${mediaBucket}.s3.${mediaRegion}.amazonaws.com` : "")).replace(/\/$/, "");
@@ -478,7 +481,7 @@ const selectFor = {
   members:
     'SELECT id, name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
   events:
-    'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
+    'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", ticket_url AS \"ticketUrl\", reservation_phone AS \"reservationPhone\", creator_pass_note AS \"creatorPassNote\", age_restriction AS \"ageRestriction\", hashtag, dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   site_media:
@@ -978,7 +981,7 @@ app.post("/api/register", async (req, res, next) => {
   }
 });
 app.use("/api", async (req, res, next) => {
-  if (req.path === "/health" || req.path.startsWith("/auth/")) return next();
+  if (req.path === "/health" || req.path.startsWith("/auth/") || req.path.startsWith("/mobile/")) return next();
   try {
     const admin = await currentAdmin(req);
     if (!admin)
@@ -991,6 +994,190 @@ app.use("/api", async (req, res, next) => {
     next(error);
   }
 });
+
+const getMobileToken = (req) => {
+  const match = String(req.headers.authorization || "").match(/^Bearer\s+([A-Za-z0-9_-]{32,100})$/i);
+  return match?.[1] || null;
+};
+
+async function getMobileMember(req) {
+  const token = getMobileToken(req);
+  if (!token || !sql) return null;
+  const tokenHash = hashSessionToken(token);
+  const rows = await sql`
+    SELECT m.id, m.name, m.email, m.track, m.points, m.rank, m.city, m.mobile,
+      m.handle, m.followers
+    FROM member_sessions s JOIN members m ON m.id = s.member_id
+    WHERE s.token_hash = ${tokenHash} AND s.expires_at > NOW() AND m.status = 'approved'
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
+async function verifyMemberPassword(password, storedHash) {
+  const stored = String(storedHash || "");
+  if (stored.startsWith("scrypt$")) {
+    const [, salt, expectedHex] = stored.split("$");
+    if (!salt || !/^[a-f0-9]{128}$/i.test(expectedHex || "")) return false;
+    const actual = await scrypt(password, salt, 64);
+    const expected = Buffer.from(expectedHex, "hex");
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+  return verifyPassword(password, stored);
+}
+
+function mobileMemberResponse(member) {
+  return { id: member.id, name: member.name, email: member.email, track: member.track, points: member.points, rank: member.rank, city: member.city, mobile: member.mobile, handle: member.handle, followers: member.followers };
+}
+
+app.get("/api/mobile/events", async (_req, res, next) => {
+  try {
+    if (!sql) return res.status(503).json({ error: "Mobile data requires the shared database to be configured." });
+    const rows = await sql`
+      SELECT id, title, brand, venue, to_char(date, 'YYYY-MM-DD') AS date, time,
+        area, category, tracks, capacity, confirmed, dress_code AS "dressCode",
+        about, included, who_is_invited AS "whoIsInvited", host_note AS "hostNote",
+        ticket_url AS "ticketUrl", reservation_phone AS "reservationPhone",
+        creator_pass_note AS "creatorPassNote", age_restriction AS "ageRestriction",
+        hashtag, track_capacities AS "trackCapacities", influencer_deliverables AS "influencerDeliverables",
+        map_url AS "mapUrl", image_gallery AS "imageGallery", image_data AS "imageData",
+        video_url AS video, status
+      FROM events WHERE status IN ('published', 'closed') ORDER BY date, time
+    `;
+    res.json(rows);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/sign-in", async (req, res, next) => {
+  try {
+    if (!sql) return res.status(503).json({ error: "Member sign-in requires the shared database." });
+    const email = text(req.body.email, 254).toLowerCase();
+    const password = String(req.body.password || "");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !password || password.length > 200) {
+      return res.status(400).json({ error: "Email or password is incorrect." });
+    }
+    const rows = await sql`
+      SELECT id, name, email, track, points, rank, city, mobile, handle, followers, password_hash AS "passwordHash"
+      FROM members WHERE lower(email) = ${email} AND status = 'approved' LIMIT 1
+    `;
+    const member = rows[0];
+    if (!member || !(await verifyMemberPassword(password, member.passwordHash))) {
+      const pending = await sql`SELECT id FROM applications WHERE lower(email) = ${email} AND status = 'pending' LIMIT 1`;
+      return res.status(401).json({ error: pending.length ? "Your application is still under review. Sign in after approval." : "Email or password is incorrect." });
+    }
+    const token = createSessionToken();
+    await sql`INSERT INTO member_sessions (token_hash, member_id, expires_at) VALUES (${hashSessionToken(token)}, ${member.id}, NOW() + (${mobileSessionLifetimeSeconds} * INTERVAL '1 second'))`;
+    const { passwordHash: _passwordHash, ...safeMember } = member;
+    res.json({ ...safeMember, accessToken: token });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/mobile/session", async (req, res, next) => {
+  try {
+    const member = await getMobileMember(req);
+    if (!member) return res.status(401).json({ error: "Sign in required." });
+    res.json(mobileMemberResponse(member));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/sign-out", async (req, res, next) => {
+  try {
+    const token = getMobileToken(req);
+    if (token && sql) await sql`DELETE FROM member_sessions WHERE token_hash = ${hashSessionToken(token)}`;
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/mobile/rsvps", async (req, res, next) => {
+  try {
+    const member = await getMobileMember(req);
+    if (!member) return res.status(401).json({ error: "Sign in required." });
+    const rows = await sql`SELECT event_id AS "eventId", status AS state FROM event_rsvp_requests WHERE member_id = ${member.id}`;
+    res.json(Object.fromEntries(rows.map((row) => [row.eventId, row.state])));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/rsvps", async (req, res, next) => {
+  try {
+    const member = await getMobileMember(req);
+    if (!member) return res.status(401).json({ error: "Sign in with an approved member account to RSVP." });
+    const eventId = text(req.body.eventId, 180);
+    const guestNames = req.body.guestNames;
+    if (!Array.isArray(guestNames) || guestNames.length > 2 || guestNames.some((name) => typeof name !== "string" || name.trim().length < 2 || name.trim().length > 120)) {
+      return res.status(400).json({ error: "Add each guest's full name, up to two guests." });
+    }
+    const rows = await sql`SELECT id, title, tracks, status, influencer_deliverables AS deliverables FROM events WHERE id = ${eventId} LIMIT 1`;
+    const event = rows[0];
+    if (!event || event.status !== "published") return res.status(400).json({ error: "This event is not accepting RSVP requests." });
+    if (!event.tracks.includes(member.track)) return res.status(403).json({ error: "This event is not open to your member track." });
+    const deliverablesAgreed = Boolean(req.body.deliverablesAgreed);
+    if (member.track === "Creators" && event.deliverables.trim() && !deliverablesAgreed) {
+      return res.status(400).json({ error: "Please review and agree to the creator deliverables before submitting." });
+    }
+    const normalizedGuests = guestNames.map((name) => name.trim());
+    const inserted = await sql`
+      INSERT INTO event_rsvp_requests (id, event_id, member_id, member_email, track, guest_names, deliverables_agreed, status)
+      VALUES (${`rsvp-${randomBytes(16).toString("hex")}`}, ${event.id}, ${member.id}, ${member.email}, ${member.track}, ${normalizedGuests}, ${member.track === "Creators" ? deliverablesAgreed : false}, 'pending')
+      ON CONFLICT (event_id, member_id) DO UPDATE SET guest_names = EXCLUDED.guest_names,
+        deliverables_agreed = EXCLUDED.deliverables_agreed, status = 'pending',
+        reviewed_at = NULL, reviewed_by = NULL, created_at = NOW(), updated_at = NOW()
+      WHERE event_rsvp_requests.status = 'declined'
+      RETURNING status
+    `;
+    if (!inserted[0]) {
+      const existing = await sql`SELECT status FROM event_rsvp_requests WHERE event_id = ${event.id} AND member_id = ${member.id} LIMIT 1`;
+      return res.status(409).json({ error: existing[0] ? `You already have an RSVP request for this event (${existing[0].status}).` : "Your RSVP request could not be saved." });
+    }
+    res.status(201).json({ status: inserted[0].status });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/rsvps/cancel", async (req, res, next) => {
+  try {
+    const member = await getMobileMember(req);
+    if (!member) return res.status(401).json({ error: "Sign in required." });
+    const id = `mobile-rsvp-${randomBytes(12).toString("hex")}`;
+    const result = await sql`
+      WITH target AS (
+        SELECT id, event_id, status, cardinality(guest_names) + 1 AS party_size
+        FROM event_rsvp_requests WHERE member_id = ${member.id} AND event_id = ${text(req.body.eventId, 180)}
+      ), capacity AS (
+        UPDATE events e SET confirmed = GREATEST(e.confirmed - COALESCE((SELECT party_size FROM target WHERE status = 'accepted'), 0), 0), updated_at = NOW()
+        WHERE e.id = (SELECT event_id FROM target) RETURNING e.id
+      ), removed AS (
+        DELETE FROM event_rsvp_requests r USING target t WHERE r.id = t.id AND EXISTS (SELECT 1 FROM capacity) RETURNING r.id
+      ) SELECT id FROM removed
+    `;
+    if (!result.length) return res.status(404).json({ error: "No RSVP request was found for this event." });
+    res.json({ ok: true, id });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/profile", async (req, res, next) => {
+  try {
+    const member = await getMobileMember(req);
+    if (!member) return res.status(401).json({ error: "Sign in to update your profile." });
+    const name = text(req.body.name, 120);
+    const city = text(req.body.city, 100);
+    const mobileInput = text(req.body.mobile, 40);
+    const digits = mobileInput.replace(/\D/g, "");
+    const mobile = `${mobileInput.startsWith("+") ? "+" : ""}${digits}`;
+    const instagram = text(req.body.instagram, 100).replace(/^@+/, "");
+    const followers = Number(String(req.body.followers || "").replace(/[ ,]/g, ""));
+    if (!name || !city || digits.length < 8 || digits.length > 15 || !Number.isSafeInteger(followers) || followers < 0) {
+      return res.status(400).json({ error: "Enter your name, city, valid phone number, and follower count." });
+    }
+    const profileUrl = instagram ? `https://www.instagram.com/${encodeURIComponent(instagram)}/` : "";
+    const rows = await sql`
+      UPDATE members SET name = ${name}, city = ${city}, mobile = ${mobile}, handle = ${instagram}, profile_url = ${profileUrl}, followers = ${followers}
+      WHERE id = ${member.id} AND status = 'approved'
+      RETURNING id, name, email, track, points, rank, city, mobile, handle, followers
+    `;
+    if (!rows[0]) return res.status(404).json({ error: "Member profile was not found." });
+    res.json(rows[0]);
+  } catch (error) { next(error); }
+});
+
 app.post("/api/media/upload-url", async (req, res, next) => {
   try {
     if (!s3 || !mediaBaseUrl) return res.status(503).json({ error: "Media storage is not configured." });
@@ -1697,6 +1884,11 @@ app.post("/api/events", async (req, res, next) => {
     const time = text(req.body.time, 40);
     const endTime = text(req.body.endTime, 40);
     const gatesOpenTime = text(req.body.gatesOpenTime, 40);
+    const ticketUrl = text(req.body.ticketUrl, 1000);
+    const reservationPhone = text(req.body.reservationPhone, 80);
+    const creatorPassNote = text(req.body.creatorPassNote, 500);
+    const ageRestriction = text(req.body.ageRestriction, 80);
+    const hashtag = text(req.body.hashtag, 120);
     const category = text(req.body.category, 80) || "Dining";
     const capacity = Number(req.body.capacity || 80);
     const ticketPrice = Number(req.body.ticketPrice || 0);
@@ -1749,27 +1941,12 @@ app.post("/api/events", async (req, res, next) => {
       return res.status(400).json({ error: "Enter a valid event end date." });
     if (endDate && endDate < date)
       return res.status(400).json({ error: "The event end date cannot be before its start date." });
-    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100000)
-      return res
-        .status(400)
-        .json({ error: "Enter a guest capacity above zero." });
     if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency))
       return res.status(400).json({ error: "Enter a valid ticket price and three-letter currency." });
     if (mapUrl && !/^https:\/\//i.test(mapUrl)) return res.status(400).json({ error: "Use a secure HTTPS link for the event map." });
     if (!["draft", "published", "pending", "closed"].includes(status))
       return res.status(400).json({ error: "Invalid event status." });
-    if (status === "published") {
-      const missing = [];
-      if (!time) missing.push("start time");
-      if (!endTime) missing.push("end time");
-      if (!gatesOpenTime) missing.push("gate opening time");
-      if (!venue) missing.push("venue");
-      if (!mapUrl) missing.push("Google Maps link");
-      if (!imageData) missing.push("cover photo");
-      if (!tracks.length) missing.push("at least one invited track");
-      if (tracks.includes("Creators") && !influencerDeliverables) missing.push("creator deliverables");
-      if (missing.length) return res.status(400).json({ error: `Add ${missing.join(", ")} before publishing.` });
-    }
+    if (ticketUrl && !/^https:\/\//i.test(ticketUrl)) return res.status(400).json({ error: "Use a secure HTTPS ticket link." });
     if (
       imageDataList.length > 5 ||
       imageDataList.some((image) => !/^https:\/\//.test(image) || !mediaBaseUrl || !image.startsWith(`${mediaBaseUrl}/media/`))
@@ -1778,6 +1955,8 @@ app.post("/api/events", async (req, res, next) => {
         .status(400)
         .json({ error: "Choose up to 5 uploaded JPG, PNG or WebP images from the configured RSVP media bucket." });
     if (videoUrl && (!mediaBaseUrl || !videoUrl.startsWith(`${mediaBaseUrl}/media/`))) return res.status(400).json({ error: "The event video must be uploaded to configured media storage." });
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100000)
+      return res.status(400).json({ error: "Enter a guest capacity above zero." });
     const id = `event-${crypto.randomUUID()}`;
     const event = {
       id,
@@ -1790,6 +1969,11 @@ app.post("/api/events", async (req, res, next) => {
       time,
       endTime,
       gatesOpenTime,
+      ticketUrl,
+      reservationPhone,
+      creatorPassNote,
+      ageRestriction,
+      hashtag,
       capacity,
       confirmed: 0,
       ticketPrice,
@@ -1811,7 +1995,7 @@ app.post("/api/events", async (req, res, next) => {
     };
     if (!sql) demo.events.unshift(event);
     else
-      await sql`INSERT INTO events (id, title, brand, venue, date, end_date, time, end_time, gates_open_time, area, capacity, confirmed, ticket_price, ticket_currency, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, track_capacities, influencer_deliverables, map_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${endDate || null}, ${time}, ${endTime}, ${gatesOpenTime}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${JSON.stringify(trackCapacities)}::jsonb, ${influencerDeliverables}, ${mapUrl}, ${status})`;
+      await sql`INSERT INTO events (id, title, brand, venue, date, end_date, time, end_time, gates_open_time, area, capacity, confirmed, ticket_price, ticket_currency, ticket_url, reservation_phone, creator_pass_note, age_restriction, hashtag, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, track_capacities, influencer_deliverables, map_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${endDate || null}, ${time}, ${endTime}, ${gatesOpenTime}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${ticketUrl}, ${reservationPhone}, ${creatorPassNote}, ${ageRestriction}, ${hashtag}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${JSON.stringify(trackCapacities)}::jsonb, ${influencerDeliverables}, ${mapUrl}, ${status})`;
     res.status(201).json(event);
   } catch (error) {
     next(error);
@@ -1841,20 +2025,11 @@ app.patch("/api/events/:id", async (req, res, next) => {
       return res.status(400).json({ error: "Invalid event status." });
     if (status === "published") {
       const rows = sql
-        ? await sql`SELECT time, end_time, gates_open_time, venue, map_url, image_data, tracks, influencer_deliverables FROM events WHERE id = ${req.params.id} LIMIT 1`
+        ? await sql`SELECT image_data FROM events WHERE id = ${req.params.id} LIMIT 1`
         : [demo.events.find((row) => row.id === req.params.id)];
       const event = rows[0];
       if (!event) return res.status(404).json({ error: "Event not found." });
-      const missing = [];
-      if (!event.time) missing.push("start time");
-      if (!event.end_time && !event.endTime) missing.push("end time");
-      if (!event.gates_open_time && !event.gatesOpenTime) missing.push("gate opening time");
-      if (!event.venue) missing.push("venue");
-      if (!event.map_url && !event.mapUrl) missing.push("Google Maps link");
-      if (!event.image_data && !event.imageData) missing.push("cover photo");
-      if (!event.tracks?.length) missing.push("at least one invited track");
-      if (event.tracks?.includes("Creators") && !(event.influencer_deliverables || event.influencerDeliverables)) missing.push("creator deliverables");
-      if (missing.length) return res.status(400).json({ error: `Add ${missing.join(", ")} before publishing.` });
+      if (!event) return res.status(404).json({ error: "Event not found." });
     }
     if (!sql) {
       const item = demo.events.find((row) => row.id === req.params.id);

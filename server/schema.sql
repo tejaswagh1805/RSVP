@@ -45,6 +45,15 @@ CREATE TABLE IF NOT EXISTS members (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS member_sessions (
+  token_hash TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS member_sessions_member_id_idx ON member_sessions(member_id);
+
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -73,6 +82,11 @@ CREATE TABLE IF NOT EXISTS events (
   end_date DATE,
   end_time TEXT NOT NULL DEFAULT '',
   gates_open_time TEXT NOT NULL DEFAULT '',
+  ticket_url TEXT NOT NULL DEFAULT '',
+  reservation_phone TEXT NOT NULL DEFAULT '',
+  creator_pass_note TEXT NOT NULL DEFAULT '',
+  age_restriction TEXT NOT NULL DEFAULT '',
+  hashtag TEXT NOT NULL DEFAULT '',
   video_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'pending', 'published', 'closed')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -85,6 +99,11 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS map_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS end_date DATE;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS end_time TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS gates_open_time TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS ticket_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS reservation_phone TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS creator_pass_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS age_restriction TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS hashtag TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS event_rsvp_requests (
   id TEXT PRIMARY KEY,
