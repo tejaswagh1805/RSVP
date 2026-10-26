@@ -57,14 +57,14 @@ CREATE INDEX IF NOT EXISTS member_sessions_member_id_idx ON member_sessions(memb
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
-  brand TEXT NOT NULL,
+  brand TEXT NOT NULL DEFAULT '',
   venue TEXT NOT NULL DEFAULT '',
   date DATE NOT NULL,
   time TEXT NOT NULL DEFAULT '',
   area TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'Dining',
   tracks TEXT[] NOT NULL DEFAULT '{}',
-  capacity INTEGER NOT NULL DEFAULT 80 CHECK (capacity > 0),
+  capacity INTEGER NOT NULL DEFAULT 80 CHECK (capacity >= 0),
   confirmed INTEGER NOT NULL DEFAULT 0,
   ticket_price NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (ticket_price >= 0),
   ticket_currency TEXT NOT NULL DEFAULT 'AED',
@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS events (
   creator_pass_note TEXT NOT NULL DEFAULT '',
   age_restriction TEXT NOT NULL DEFAULT '',
   hashtag TEXT NOT NULL DEFAULT '',
+  application_deadline DATE,
+  action_label TEXT NOT NULL DEFAULT '',
   video_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'pending', 'published', 'closed')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -104,6 +106,13 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS reservation_phone TEXT NOT NULL DEFA
 ALTER TABLE events ADD COLUMN IF NOT EXISTS creator_pass_note TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS age_restriction TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS hashtag TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS application_deadline DATE;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS action_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ALTER COLUMN brand SET DEFAULT '';
+ALTER TABLE events ALTER COLUMN brand DROP NOT NULL;
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_capacity_check;
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_capacity_nonnegative;
+ALTER TABLE events ADD CONSTRAINT events_capacity_nonnegative CHECK (capacity >= 0);
 
 CREATE TABLE IF NOT EXISTS event_rsvp_requests (
   id TEXT PRIMARY KEY,

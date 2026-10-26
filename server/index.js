@@ -481,7 +481,7 @@ const selectFor = {
   members:
     'SELECT id, name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
   events:
-    'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", ticket_url AS \"ticketUrl\", reservation_phone AS \"reservationPhone\", creator_pass_note AS \"creatorPassNote\", age_restriction AS \"ageRestriction\", hashtag, dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
+    'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", ticket_url AS \"ticketUrl\", reservation_phone AS \"reservationPhone\", creator_pass_note AS \"creatorPassNote\", age_restriction AS \"ageRestriction\", hashtag, application_deadline::text AS \"applicationDeadline\", action_label AS \"actionLabel\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   site_media:
@@ -1035,6 +1035,7 @@ app.get("/api/mobile/events", async (_req, res, next) => {
     if (!sql) return res.status(503).json({ error: "Mobile data requires the shared database to be configured." });
     const rows = await sql`
       SELECT id, title, brand, venue, to_char(date, 'YYYY-MM-DD') AS date, time,
+        application_deadline::text AS "applicationDeadline", action_label AS "actionLabel",
         area, category, tracks, capacity, confirmed, dress_code AS "dressCode",
         about, included, who_is_invited AS "whoIsInvited", host_note AS "hostNote",
         ticket_url AS "ticketUrl", reservation_phone AS "reservationPhone",
@@ -1043,6 +1044,22 @@ app.get("/api/mobile/events", async (_req, res, next) => {
         map_url AS "mapUrl", image_gallery AS "imageGallery", image_data AS "imageData",
         video_url AS video, status
       FROM events WHERE status IN ('published', 'closed') ORDER BY date, time
+    `;
+    res.json(rows);
+  } catch (error) { next(error); }
+});
+
+app.get("/api/mobile/people-profiles", async (_req, res, next) => {
+  try {
+    if (!sql) return res.status(503).json({ error: "People profiles require the shared database." });
+    const rows = await sql`
+      SELECT id, category, name, role, subtitle, bio, image_url AS "imageUrl",
+        instagram_url AS "instagramUrl", tiktok_url AS "tiktokUrl",
+        youtube_url AS "youtubeUrl", x_url AS "xUrl",
+        display_order AS "displayOrder"
+      FROM people_profiles
+      WHERE active = TRUE
+      ORDER BY category, display_order, created_at DESC
     `;
     res.json(rows);
   } catch (error) { next(error); }
@@ -1889,8 +1906,10 @@ app.post("/api/events", async (req, res, next) => {
     const creatorPassNote = text(req.body.creatorPassNote, 500);
     const ageRestriction = text(req.body.ageRestriction, 80);
     const hashtag = text(req.body.hashtag, 120);
+    const applicationDeadline = text(req.body.applicationDeadline, 10);
+    const actionLabel = text(req.body.actionLabel, 60);
     const category = text(req.body.category, 80) || "Dining";
-    const capacity = Number(req.body.capacity || 80);
+    const capacity = Number(req.body.capacity ?? 80);
     const ticketPrice = Number(req.body.ticketPrice || 0);
     const ticketCurrency = text(req.body.ticketCurrency, 3).toUpperCase() || "AED";
     const status = String(req.body.status || "draft");
@@ -1933,14 +1952,18 @@ app.post("/api/events", async (req, res, next) => {
       ? req.body.imageDataList.map((value) => String(value || ""))
       : req.body.imageData ? [String(req.body.imageData)] : [];
     const imageData = imageDataList[0] || "";
-    if (!title || !brand || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+    if (!title || !/^\d{4}-\d{2}-\d{2}$/.test(date))
       return res
         .status(400)
-        .json({ error: "Event title, brand and a valid date are required." });
+        .json({ error: "Event title and a valid date are required." });
+    if (applicationDeadline && !/^\d{4}-\d{2}-\d{2}$/.test(applicationDeadline))
+      return res.status(400).json({ error: "Enter a valid application deadline." });
     if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
       return res.status(400).json({ error: "Enter a valid event end date." });
     if (endDate && endDate < date)
       return res.status(400).json({ error: "The event end date cannot be before its start date." });
+    if (applicationDeadline && applicationDeadline > date)
+      return res.status(400).json({ error: "The application deadline cannot be after the event date." });
     if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency))
       return res.status(400).json({ error: "Enter a valid ticket price and three-letter currency." });
     if (mapUrl && !/^https:\/\//i.test(mapUrl)) return res.status(400).json({ error: "Use a secure HTTPS link for the event map." });
@@ -1955,8 +1978,8 @@ app.post("/api/events", async (req, res, next) => {
         .status(400)
         .json({ error: "Choose up to 5 uploaded JPG, PNG or WebP images from the configured RSVP media bucket." });
     if (videoUrl && (!mediaBaseUrl || !videoUrl.startsWith(`${mediaBaseUrl}/media/`))) return res.status(400).json({ error: "The event video must be uploaded to configured media storage." });
-    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100000)
-      return res.status(400).json({ error: "Enter a guest capacity above zero." });
+    if (!Number.isInteger(capacity) || capacity < (tracks.length ? 1 : 0) || capacity > 100000)
+      return res.status(400).json({ error: tracks.length ? "Enter a guest capacity above zero." : "Capacity cannot be negative." });
     const id = `event-${crypto.randomUUID()}`;
     const event = {
       id,
@@ -1974,6 +1997,8 @@ app.post("/api/events", async (req, res, next) => {
       creatorPassNote,
       ageRestriction,
       hashtag,
+      applicationDeadline,
+      actionLabel,
       capacity,
       confirmed: 0,
       ticketPrice,
@@ -1995,7 +2020,7 @@ app.post("/api/events", async (req, res, next) => {
     };
     if (!sql) demo.events.unshift(event);
     else
-      await sql`INSERT INTO events (id, title, brand, venue, date, end_date, time, end_time, gates_open_time, area, capacity, confirmed, ticket_price, ticket_currency, ticket_url, reservation_phone, creator_pass_note, age_restriction, hashtag, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, track_capacities, influencer_deliverables, map_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${endDate || null}, ${time}, ${endTime}, ${gatesOpenTime}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${ticketUrl}, ${reservationPhone}, ${creatorPassNote}, ${ageRestriction}, ${hashtag}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${JSON.stringify(trackCapacities)}::jsonb, ${influencerDeliverables}, ${mapUrl}, ${status})`;
+      await sql`INSERT INTO events (id, title, brand, venue, date, end_date, time, end_time, gates_open_time, area, capacity, confirmed, ticket_price, ticket_currency, ticket_url, reservation_phone, creator_pass_note, age_restriction, hashtag, application_deadline, action_label, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, track_capacities, influencer_deliverables, map_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${endDate || null}, ${time}, ${endTime}, ${gatesOpenTime}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${ticketUrl}, ${reservationPhone}, ${creatorPassNote}, ${ageRestriction}, ${hashtag}, ${applicationDeadline || null}, ${actionLabel}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${JSON.stringify(trackCapacities)}::jsonb, ${influencerDeliverables}, ${mapUrl}, ${status})`;
     res.status(201).json(event);
   } catch (error) {
     next(error);
@@ -2028,7 +2053,6 @@ app.patch("/api/events/:id", async (req, res, next) => {
         ? await sql`SELECT image_data FROM events WHERE id = ${req.params.id} LIMIT 1`
         : [demo.events.find((row) => row.id === req.params.id)];
       const event = rows[0];
-      if (!event) return res.status(404).json({ error: "Event not found." });
       if (!event) return res.status(404).json({ error: "Event not found." });
     }
     if (!sql) {

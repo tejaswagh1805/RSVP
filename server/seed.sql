@@ -6,6 +6,19 @@ INSERT INTO applications (id, name, email, track, city, detail, followers, submi
 ('app-5', 'Sofia Mendes', 'sofia@luxereport.co', 'Creators', 'Dubai', 'Beauty creator — YouTube + IG', '41k', '2026-09-26', 'pending')
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO events (
+  id, title, brand, venue, date, time, gates_open_time, area, category,
+  tracks, capacity, confirmed, ticket_price, ticket_currency, ticket_url,
+  reservation_phone, creator_pass_note, age_restriction, hashtag,
+  application_deadline, action_label, about, who_is_invited, status
+) VALUES
+('client-pataakha-2026', 'PATAAKHA: Pre-Diwali Bash', '', 'Surf Club, West Beach', '2026-11-04', '', '', 'Palm Jumeirah', 'Nightlife', '{}', 0, 0, 0, 'AED', 'https://district.ae/events/pataakha-2026-buy-tickets', '050-8553372', 'RSVP for limited creator passes.', '21+', '#RoadToPataakha', NULL, 'Buy tickets', 'PATAAKHA turns Surf Club into one massive firecracker of a night, headlined by AFTERALL live with G2, Vkram and Rahul Kateja. Surf Club is allowing desi dress on the beach for the first time. Picture 1,500 people, sand underfoot, sea breeze and bass you feel in your chest.', 'Tickets and reservations; age 21+. Limited creator passes by RSVP.', 'published'),
+('client-double-trouble-2026', 'Double Trouble: Raunaq Rajani & Gursimran Khamba', '', 'Emirates Theatre', '2026-11-29', '17:00', '', 'Dubai', 'Comedy', '{}', 0, 0, 0, 'AED', 'https://dubai.platinumlist.net/event-tickets/109363/double-trouble-ft-gursimran-khamba-and-raunaq-rajani', '', 'RSVP for limited creator spots.', '', '', NULL, 'Buy tickets', 'Raunaq Rajani and Gursimran Khamba bring Double Trouble to Dubai for a night of quick wit, brutally honest observations and jokes to repeat in the group chat. Catch them live together on one stage.', 'Limited creator spots; request a creator pass through RSVP DXB.', 'published'),
+('client-chai-chandan-2026', 'Chai with Chandan: Chandan Prabhakar', '', 'Emirates Theatre', '2026-12-19', '', '16:00', 'Dubai', 'Comedy', '{}', 0, 0, 0, 'AED', '', '', 'RSVP for limited creator spots.', '', '', NULL, 'Ticket link to add', 'Chandan Prabhakar brings his signature desi humour to Dubai, with warmth, nostalgia and comedy for the whole family.', 'Gates open at 4:00 PM. Ticket link to be added. Creator spots are limited; request a creator pass through RSVP DXB.', 'published'),
+('client-kullu-comedy-2026', 'Kullu, Nishant Suri & Kaustubh Aggarwal', '', 'Emirates Theatre', '2026-12-26', '', '', 'Dubai', 'Comedy', '{}', 0, 0, 0, 'AED', '', '', 'RSVP for limited creator spots.', '', '', NULL, 'Ticket link to add', 'Kullu, Nishant Suri and Kaustubh Aggarwal team up for one night of back-to-back comedy sets and desi energy.', 'Creator spots are limited; request a creator pass through RSVP DXB.', 'published'),
+('client-global-digital-creator-awards-2027', 'Global Digital Creator Awards: Asian Film Festival of Dubai', 'Asian Film Festival of Dubai', '', '2027-02-05', '', '', 'Dubai', 'Awards', '{}', 0, 0, 0, 'AED', 'https://www.affdubai.com/awards', '', 'Post one video in collaboration with @asian.filmfestivalofdubai and submit the form at affdubai.com/awards. There are 20 categories, with winners selected by public vote and jury.', '', '', '2026-11-28', 'Get nominated', 'The Asian Film Festival of Dubai is celebrating creators with the Global Digital Creator Awards. Open to food, fashion, travel, comedy, lifestyle and other creators. Nominations close 28 November 2026; awards night in Dubai is 5 February 2027.', 'Nomination requires a collaboration video with @asian.filmfestivalofdubai and the online form.', 'published')
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO members (id, name, email, track, rank, points, events, city) VALUES
 ('m1', 'Tejas Nair', 'tejas@creators.ae', 'Creators', 'Gold', 640, 18, 'Dubai'),
 ('m2', 'Hala Zayed', 'hala@example.com', 'Media', 'Diamond', 1180, 31, 'Dubai'),
