@@ -73,17 +73,26 @@ async function runQuery(query) {
   try {
     return await query();
   } catch (error) {
-    const cause = error?.sourceError?.cause || error?.cause;
-    const transient = cause?.code === 'UND_ERR_CONNECT_TIMEOUT' || cause?.code === 'ECONNRESET' || cause?.code === 'ETIMEDOUT' || /fetch failed/i.test(error?.message || '');
+    const getCause = (candidate) => candidate?.sourceError?.cause || candidate?.cause;
+    const isTransient = (candidate) => {
+      const cause = getCause(candidate);
+      return ['UND_ERR_CONNECT_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED'].includes(cause?.code)
+        || /fetch failed/i.test(candidate?.message || '');
+    };
+    const transient = isTransient(error);
     if (transient) {
-      console.warn('Neon connection timed out; retrying once in 2 seconds...');
+      console.warn(`Neon connection failed${getCause(error)?.code ? ` (${getCause(error).code})` : ''}; retrying once in 2 seconds...`);
       await new Promise((resolve) => setTimeout(resolve, 2000));
       try { return await query(); }
       catch (retryError) {
-        const retryCause = retryError?.sourceError?.cause || retryError?.cause;
-        if (retryCause?.code === 'UND_ERR_CONNECT_TIMEOUT' || retryCause?.code === 'ECONNRESET' || retryCause?.code === 'ETIMEDOUT' || /fetch failed/i.test(retryError?.message || '')) {
-          console.error('Could not connect to Neon after retry. Check that outbound HTTPS to your Neon host is allowed by your network/firewall, then confirm the Neon project is active. If your company requires a proxy, configure a reachable proxy instead of the current placeholder. No schema setup completed.');
-          process.exit(1);
+        if (isTransient(retryError)) {
+          const code = getCause(retryError)?.code;
+          const reason = code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT'
+            ? 'Connection timed out. Check outbound HTTPS/proxy access to the Neon host and confirm that the Neon project is active.'
+            : code === 'ENOTFOUND'
+              ? 'The Neon hostname could not be resolved. Check DATABASE_URL and DNS.'
+              : 'The connection to Neon was interrupted. Check the network/proxy and retry.';
+          throw new Error(`${reason} No schema setup completed.`, { cause: retryError });
         }
         throw retryError;
       }
@@ -91,13 +100,24 @@ async function runQuery(query) {
     throw error;
   }
 }
-for (const statement of splitSqlStatements(schema)) {
-  await runQuery(() => sql.query(statement));
+try {
+  for (const statement of splitSqlStatements(schema)) {
+    await runQuery(() => sql.query(statement));
+  }
+  const seed = await readFile(path.join(root, 'server/seed.sql'), 'utf8');
+  for (const statement of splitSqlStatements(seed)) {
+    await runQuery(() => sql.query(statement));
+  }
+  const passwordHash = await hashPassword(admin.password);
+  await runQuery(() => sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`);
+  console.log('Neon schema, prototype records, and the admin account are ready.');
+} catch (error) {
+  const cause = error?.cause;
+  if (cause) {
+    console.error(error.message);
+  } else {
+    const code = error?.sourceError?.code || error?.sourceError?.cause?.code || error?.code;
+    console.error(`Database setup failed${code ? ` (${code})` : ''}: ${error?.message || 'Unknown Neon error'}`);
+  }
+  process.exitCode = 1;
 }
-const seed = await readFile(path.join(root, 'server/seed.sql'), 'utf8');
-for (const statement of splitSqlStatements(seed)) {
-  await runQuery(() => sql.query(statement));
-}
-const passwordHash = await hashPassword(admin.password);
-await runQuery(() => sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`);
-console.log('Neon schema, prototype records, and the admin account are ready.');

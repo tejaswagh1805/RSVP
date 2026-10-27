@@ -1239,6 +1239,30 @@ app.post("/api/site-media", async (req, res, next) => {
 });
 app.patch("/api/site-media/:id", async (req, res, next) => {
   try {
+    if ("title" in req.body || "slot" in req.body || "caption" in req.body || "linkUrl" in req.body) {
+      const slot = req.body.slot === "top_pick" ? "top_pick" : req.body.slot === "gallery" ? "gallery" : "";
+      const title = text(req.body.title, 180);
+      const caption = text(req.body.caption, 500);
+      const linkUrl = text(req.body.linkUrl, 500);
+      if (!slot || !title) return res.status(400).json({ error: "Choose a section and enter a title." });
+      if (linkUrl) {
+        try { if (!["http:", "https:"].includes(new URL(linkUrl).protocol)) throw new Error(); }
+        catch { return res.status(400).json({ error: "Link must use http:// or https://." }); }
+      }
+      if (sql) {
+        const existing = await sql`SELECT COALESCE(media_type, 'image') AS "mediaType" FROM site_media WHERE id = ${req.params.id} LIMIT 1`;
+        if (!existing[0]) return res.status(404).json({ error: "Website media item not found." });
+        if (existing[0].mediaType === "video" && slot === "top_pick") return res.status(400).json({ error: "Videos can only be used in the Gallery." });
+        const rows = await sql`UPDATE site_media SET slot = ${slot}, title = ${title}, caption = ${caption}, link_url = ${linkUrl} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
+        if (!rows[0]) return res.status(404).json({ error: "Website media item not found." });
+        return res.json(rows[0]);
+      }
+      const item = demo.site_media.find((row) => row.id === req.params.id);
+      if (!item) return res.status(404).json({ error: "Website media item not found." });
+      if (item.mediaType === "video" && slot === "top_pick") return res.status(400).json({ error: "Videos can only be used in the Gallery." });
+      Object.assign(item, { slot, title, caption, linkUrl });
+      return res.json(item);
+    }
     const active = Boolean(req.body.active);
     if (sql) {
       const rows = await sql`UPDATE site_media SET active = ${active} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
@@ -1249,6 +1273,19 @@ app.patch("/api/site-media/:id", async (req, res, next) => {
     if (!item) return res.status(404).json({ error: "Website media item not found." });
     item.active = active;
     res.json(item);
+  } catch (error) { next(error); }
+});
+app.delete("/api/site-media/:id", async (req, res, next) => {
+  try {
+    if (sql) {
+      const rows = await sql`DELETE FROM site_media WHERE id = ${req.params.id} RETURNING id`;
+      if (!rows[0]) return res.status(404).json({ error: "Website media item not found." });
+      return res.json({ id: rows[0].id, deleted: true });
+    }
+    const index = demo.site_media.findIndex((row) => row.id === req.params.id);
+    if (index < 0) return res.status(404).json({ error: "Website media item not found." });
+    const [item] = demo.site_media.splice(index, 1);
+    res.json({ id: item.id, deleted: true });
   } catch (error) { next(error); }
 });
 app.post("/api/people-profiles", async (req, res, next) => {
