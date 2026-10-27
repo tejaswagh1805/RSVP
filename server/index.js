@@ -1201,10 +1201,11 @@ app.post("/api/media/upload-url", async (req, res, next) => {
     const filename = text(req.body.filename, 160);
     const contentType = text(req.body.contentType, 100).toLowerCase();
     const size = Number(req.body.size);
+    const siteGalleryVideo = req.body.purpose === "site-gallery" && contentType.startsWith("video/");
     const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" };
     if (!extensions[contentType]) return res.status(400).json({ error: "Use a JPG, PNG, WebP image or MP4, WebM, MOV video." });
-    const maxBytes = contentType.startsWith("video/") ? 100 * 1024 * 1024 : 12 * 1024 * 1024;
-    if (!Number.isInteger(size) || size <= 0 || size > maxBytes) return res.status(400).json({ error: `File must be smaller than ${contentType.startsWith("video/") ? "100 MB" : "12 MB"}.` });
+    const maxBytes = contentType.startsWith("video/") ? (siteGalleryVideo ? 500 : 100) * 1024 * 1024 : 12 * 1024 * 1024;
+    if (!Number.isInteger(size) || size <= 0 || size > maxBytes) return res.status(400).json({ error: `File must be smaller than ${contentType.startsWith("video/") ? `${siteGalleryVideo ? "500" : "100"} MB` : "12 MB"}.` });
     const safeName = filename.normalize("NFKD").replace(/[^a-zA-Z0-9._-]/g, "-").slice(-100) || `upload.${extensions[contentType]}`;
     // S3 has a flat keyspace; omit date prefixes so uploads appear directly in media/.
     const key = `media/${crypto.randomUUID()}-${safeName}`;

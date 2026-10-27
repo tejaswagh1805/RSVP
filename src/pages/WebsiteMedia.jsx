@@ -22,9 +22,9 @@ export default function WebsiteMedia({ rows, act }) {
     setError('');
     if (!next) { setFile(null); setPreview(''); return; }
     const validImage = ['image/jpeg', 'image/png', 'image/webp'].includes(next.type) && next.size <= 12 * 1024 * 1024;
-    const validVideo = slot === 'gallery' && ['video/mp4', 'video/webm', 'video/quicktime'].includes(next.type) && next.size <= 100 * 1024 * 1024;
+    const validVideo = slot === 'gallery' && ['video/mp4', 'video/webm', 'video/quicktime'].includes(next.type) && next.size <= 500 * 1024 * 1024;
     if (!validImage && !validVideo) {
-      setFile(null); setPreview(''); setError(slot === 'gallery' ? 'Choose a JPG, PNG or WebP image up to 12 MB, or an MP4, WebM or MOV video up to 100 MB.' : 'Choose a JPG, PNG or WebP image up to 12 MB.'); return;
+      setFile(null); setPreview(''); setError(slot === 'gallery' ? 'Choose a JPG, PNG or WebP image up to 12 MB, or an MP4, WebM or MOV video up to 500 MB.' : 'Choose a JPG, PNG or WebP image up to 12 MB.'); return;
     }
     setMediaType(validVideo ? 'video' : 'image');
     setFile(next); setPreview(URL.createObjectURL(next));
@@ -35,7 +35,7 @@ export default function WebsiteMedia({ rows, act }) {
     if (!file || !title.trim()) { setError('Choose a media file and enter a title.'); return; }
     setBusy(true); setError('');
     try {
-      const { uploadUrl, publicUrl, key } = await api.mediaUploadUrl(file);
+      const { uploadUrl, publicUrl, key } = await api.mediaUploadUrl(file, { siteGallery: slot === 'gallery' && mediaType === 'video' });
       const response = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
       if (!response.ok) throw new Error('Media upload to S3 failed.');
       await api.createSiteMedia({ slot, title: title.trim(), caption: caption.trim(), linkUrl: linkUrl.trim(), imageUrl: publicUrl, mediaType, objectKey: key });
@@ -85,7 +85,7 @@ export default function WebsiteMedia({ rows, act }) {
         </div>
         <label className="field"><span>Caption</span><textarea rows="2" maxLength={500} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Optional supporting text" /></label>
         {slot === 'top_pick' ? <label className="field"><span>Link (optional)</span><input type="url" maxLength={500} value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://…" /></label> : null}
-        <label className="field"><span>{slot === 'gallery' ? 'Image (JPG, PNG or WebP, up to 12 MB) or video (MP4, WebM or MOV, up to 100 MB)' : 'Image (JPG, PNG or WebP, up to 12 MB)'} *</span><input type="file" accept={slot === 'gallery' ? 'image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime' : 'image/jpeg,image/png,image/webp'} onChange={(e) => { chooseFile(e.target.files?.[0] || null); e.target.value = ''; }} /></label>
+        <label className="field"><span>{slot === 'gallery' ? 'Image (JPG, PNG or WebP, up to 12 MB) or video (MP4, WebM or MOV, up to 500 MB)' : 'Image (JPG, PNG or WebP, up to 12 MB)'} *</span><input type="file" accept={slot === 'gallery' ? 'image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime' : 'image/jpeg,image/png,image/webp'} onChange={(e) => { chooseFile(e.target.files?.[0] || null); e.target.value = ''; }} /></label>
         {preview ? (mediaType === 'video' ? <video src={preview} controls muted playsInline style={{ maxWidth: 360, maxHeight: 220, borderRadius: 8 }} /> : <img src={preview} alt="Selected upload preview" style={{ maxWidth: 360, maxHeight: 220, objectFit: 'cover', borderRadius: 8 }} />) : null}
         {error ? <p className="event-image-error" role="alert">{error}</p> : null}
         <div><button className="button button-primary" disabled={busy || !file || !title.trim()}>{busy ? 'Uploading…' : <><ImagePlus size={16} /> Upload & publish</>}</button></div>
