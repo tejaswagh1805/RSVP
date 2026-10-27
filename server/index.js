@@ -485,7 +485,7 @@ const selectFor = {
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   site_media:
-    'SELECT id, slot, title, caption, image_url AS "imageUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM site_media ORDER BY slot, display_order, created_at DESC',
+    'SELECT id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, \'image\') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM site_media ORDER BY slot, display_order, created_at DESC',
   people_profiles:
     'SELECT id, category, name, role, subtitle, bio, image_url AS "imageUrl", object_key AS "objectKey", instagram_url AS "instagramUrl", tiktok_url AS "tiktokUrl", youtube_url AS "youtubeUrl", x_url AS "xUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM people_profiles ORDER BY category, display_order, created_at DESC',
   venues:
@@ -1218,9 +1218,11 @@ app.post("/api/site-media", async (req, res, next) => {
     const title = text(req.body.title, 180);
     const caption = text(req.body.caption, 500);
     const imageUrl = String(req.body.imageUrl || "");
+    const mediaType = req.body.mediaType === "video" ? "video" : "image";
     const objectKey = String(req.body.objectKey || "");
     const linkUrl = text(req.body.linkUrl, 500);
-    if (!slot || !title || !mediaBaseUrl || !objectKey.startsWith("media/") || imageUrl !== `${mediaBaseUrl}/${objectKey}`) {
+    const validType = mediaType === "video" ? slot === "gallery" && /\.(mp4|webm|mov)$/i.test(objectKey) : true;
+    if (!slot || !title || !validType || !mediaBaseUrl || !objectKey.startsWith("media/") || imageUrl !== `${mediaBaseUrl}/${objectKey}`) {
       return res.status(400).json({ error: "Choose a section, title and valid RSVP media upload." });
     }
     if (linkUrl) {
@@ -1229,8 +1231,8 @@ app.post("/api/site-media", async (req, res, next) => {
     }
     const id = `site-media-${crypto.randomUUID()}`;
     const displayOrder = Math.max(0, Math.min(9999, Number(req.body.displayOrder) || 0));
-    const item = { id, slot, title, caption, imageUrl, objectKey, linkUrl, displayOrder, active: true };
-    if (sql) await sql`INSERT INTO site_media (id, slot, title, caption, image_url, object_key, link_url, display_order) VALUES (${id}, ${slot}, ${title}, ${caption}, ${imageUrl}, ${objectKey}, ${linkUrl}, ${displayOrder})`;
+    const item = { id, slot, title, caption, imageUrl, mediaType, objectKey, linkUrl, displayOrder, active: true };
+    if (sql) await sql`INSERT INTO site_media (id, slot, title, caption, image_url, object_key, link_url, display_order, media_type) VALUES (${id}, ${slot}, ${title}, ${caption}, ${imageUrl}, ${objectKey}, ${linkUrl}, ${displayOrder}, ${mediaType})`;
     else demo.site_media.unshift(item);
     res.status(201).json(item);
   } catch (error) { next(error); }
@@ -1239,7 +1241,7 @@ app.patch("/api/site-media/:id", async (req, res, next) => {
   try {
     const active = Boolean(req.body.active);
     if (sql) {
-      const rows = await sql`UPDATE site_media SET active = ${active} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
+      const rows = await sql`UPDATE site_media SET active = ${active} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
       if (!rows[0]) return res.status(404).json({ error: "Website media item not found." });
       return res.json(rows[0]);
     }
