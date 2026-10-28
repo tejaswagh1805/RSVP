@@ -108,6 +108,10 @@ try {
   for (const statement of splitSqlStatements(seed)) {
     await runQuery(() => sql.query(statement));
   }
+  const pastEvents = await readFile(path.join(root, 'server/past-event-listings.sql'), 'utf8');
+  for (const statement of splitSqlStatements(pastEvents)) {
+    await runQuery(() => sql.query(statement));
+  }
   const passwordHash = await hashPassword(admin.password);
   await runQuery(() => sql`INSERT INTO admin_users (id, name, email, password_hash, role, active) VALUES (${admin.id}, ${admin.name}, ${admin.email}, ${passwordHash}, ${admin.role}, TRUE) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = TRUE, updated_at = NOW()`);
   console.log('Neon schema, prototype records, and the admin account are ready.');
