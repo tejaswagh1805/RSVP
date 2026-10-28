@@ -479,7 +479,7 @@ const selectFor = {
   applications:
     'SELECT id, name, email, track, city, detail, followers, profile_url AS "profileUrl", handle, platform, mobile, outlet, application_role AS role, all_profiles AS "allProfiles", source_track AS "sourceTrack", submitted::text AS submitted, status FROM applications ORDER BY submitted DESC',
   members:
-    'SELECT id, name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
+    'SELECT id, member_number AS "memberNumber", name, email, track, source_track AS "sourceTrack", rank, points, events, city, profile_url AS "profileUrl", handle, platform, followers, mobile, outlet, member_role AS role, all_profiles AS "allProfiles", status, joined::text AS joined FROM members ORDER BY name',
   events:
     'SELECT id, title, brand, venue, date::text AS date, end_date::text AS \"endDate\", time, end_time AS \"endTime\", gates_open_time AS \"gatesOpenTime\", area, category, tracks, capacity, confirmed, ticket_price AS \"ticketPrice\", ticket_currency AS \"ticketCurrency\", ticket_url AS \"ticketUrl\", reservation_phone AS \"reservationPhone\", creator_pass_note AS \"creatorPassNote\", age_restriction AS \"ageRestriction\", hashtag, application_deadline::text AS \"applicationDeadline\", action_label AS \"actionLabel\", dress_code AS \"dressCode\", about, included, who_is_invited AS \"whoIsInvited\", host_note AS \"hostNote\", COALESCE(image_gallery[1], image_data) AS \"imageData\", image_gallery AS \"imageGallery\", video_url AS \"videoUrl\", track_capacities AS \"trackCapacities\", influencer_deliverables AS \"influencerDeliverables\", map_url AS \"mapUrl\", (SELECT COUNT(*)::int FROM event_rsvp_requests r WHERE r.event_id = events.id AND r.status = \'pending\') AS \"pendingRsvpCount\", status FROM events ORDER BY date',
   wall_posts:
@@ -1006,7 +1006,7 @@ async function getMobileMember(req) {
   const tokenHash = hashSessionToken(token);
   const rows = await sql`
     SELECT m.id, m.name, m.email, m.track, m.points, m.rank, m.city, m.mobile,
-      m.handle, m.followers
+      m.handle, m.followers, m.member_number AS "memberNumber"
     FROM member_sessions s JOIN members m ON m.id = s.member_id
     WHERE s.token_hash = ${tokenHash} AND s.expires_at > NOW() AND m.status = 'approved'
     LIMIT 1
@@ -1027,7 +1027,7 @@ async function verifyMemberPassword(password, storedHash) {
 }
 
 function mobileMemberResponse(member) {
-  return { id: member.id, name: member.name, email: member.email, track: member.track, points: member.points, rank: member.rank, city: member.city, mobile: member.mobile, handle: member.handle, followers: member.followers };
+  return { id: member.id, name: member.name, email: member.email, track: member.track, points: member.points, rank: member.rank, city: member.city, mobile: member.mobile, handle: member.handle, followers: member.followers, memberNumber: member.memberNumber };
 }
 
 app.get("/api/mobile/events", async (_req, res, next) => {
@@ -1074,7 +1074,8 @@ app.post("/api/mobile/sign-in", async (req, res, next) => {
       return res.status(400).json({ error: "Email or password is incorrect." });
     }
     const rows = await sql`
-      SELECT id, name, email, track, points, rank, city, mobile, handle, followers, password_hash AS "passwordHash"
+      SELECT id, name, email, track, points, rank, city, mobile, handle, followers,
+        member_number AS "memberNumber", password_hash AS "passwordHash"
       FROM members WHERE lower(email) = ${email} AND status = 'approved' LIMIT 1
     `;
     const member = rows[0];
