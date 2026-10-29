@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   sendInvitationEmail,
   sendInvitationWhatsApp,
+  sendMembershipApprovalEmail,
   sendRsvpDecisionEmail,
 } from "./invitation-delivery.js";
 import {
@@ -1911,14 +1912,20 @@ app.patch("/api/applications/:id", async (req, res, next) => {
       const { passwordHash: _passwordHash, ...safeItem } = item;
       return res.json(safeItem);
     }
+    const currentRows = await sql`SELECT status FROM applications WHERE id = ${req.params.id} LIMIT 1`;
+    const current = currentRows[0];
+    if (!current) return res.status(404).json({ error: "Application not found." });
     const rows =
       await sql`UPDATE applications SET status = ${status}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING id, name, email, track, city, detail, followers, profile_url, handle, platform, mobile, outlet, application_role, all_profiles, source_track, password_hash, submitted, status`;
     const item = rows[0];
     if (!item) return res.status(404).json({ error: "Application not found." });
     if (status === "approved")
       await sql`INSERT INTO members (name, email, track, source_track, rank, points, events, city, profile_url, handle, platform, followers, mobile, outlet, member_role, all_profiles, status, joined, password_hash) VALUES (${item.name}, ${item.email}, ${item.track}, ${item.source_track || item.track}, 'Bronze', 10, 0, ${item.city}, ${item.profile_url || ""}, ${item.handle || ""}, ${item.platform || ""}, ${Number.parseInt(item.followers, 10) || 0}, ${item.mobile || ""}, ${item.outlet || ""}, ${item.application_role || ""}, ${item.all_profiles || ""}, 'approved', ${item.submitted}, ${item.password_hash}) ON CONFLICT (email) DO NOTHING`;
+    const approvalEmail = status === "approved" && current.status !== "approved"
+      ? await sendMembershipApprovalEmail({ name: item.name, email: item.email, track: item.track })
+      : null;
     const { password_hash: _passwordHash, ...safeItem } = item;
-    res.json(safeItem);
+    res.json({ ...safeItem, ...(approvalEmail ? { approvalEmail } : {}) });
   } catch (error) {
     next(error);
   }

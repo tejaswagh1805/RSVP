@@ -99,6 +99,60 @@ export async function sendInvitationEmail({ guestName, email, event, invitationU
   }
 }
 
+export async function sendMembershipApprovalEmail({ name, email, track }) {
+  if (!email) return { status: "skipped", message: "No email address is on this application." };
+  const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim();
+  if (!region || !from)
+    return {
+      status: "not_configured",
+      message: "Member approved, but email delivery is not configured (SES_REGION / SES_FROM_EMAIL).",
+    };
+
+  const safeName = htmlEscape(name || "there");
+  const safeTrack = htmlEscape(track || "RSVP DXB");
+  const siteUrl = String(process.env.PUBLIC_SITE_URL || "https://rsvpdxb.com").replace(/\/$/, "");
+  const signInUrl = `${siteUrl}/signin`;
+  const subject = "Congratulations — your RSVP DXB membership is approved";
+  const text = [
+    `Dear ${name || "Member"},`,
+    "",
+    "Congratulations. Your RSVP DXB membership application has been approved, and your member account is now active.",
+    "",
+    `Membership track: ${track || "RSVP DXB"}`,
+    "",
+    "You can now sign in with the email address and password you used when applying to explore curated events and access member features.",
+    `Sign in: ${signInUrl}`,
+    "",
+    "We look forward to welcoming you to the RSVP DXB community.",
+    "",
+    "Warm regards,",
+    "The RSVP DXB Membership Team",
+  ].join("\n");
+  const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"></head><body style="margin:0;padding:24px 12px;background:#f3e3cb;color:#2e1c10;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%"><main style="max-width:580px;margin:0 auto;background:#fbf3e7;border:1px solid #d2b995;border-radius:16px;overflow:hidden"><header style="padding:26px 30px;background:#211b17"><div style="font-family:Georgia,'Times New Roman',serif;color:#d6b47a;font-size:25px;letter-spacing:2px;font-weight:700">RSVP DXB</div><div style="margin-top:5px;color:#c5b9a9;font-size:10px;letter-spacing:2px;text-transform:uppercase">Private events · Dubai</div></header><div style="height:4px;background:#80512f"></div><section style="padding:34px 30px 30px"><div style="display:inline-block;padding:7px 12px;border-radius:999px;background:#f0dfc2;color:#80512f;font-size:11px;letter-spacing:1px;text-transform:uppercase;font-weight:700">Membership approved</div><h1 style="margin:18px 0 16px;font-family:Georgia,'Times New Roman',serif;font-size:32px;line-height:1.2;font-weight:500;color:#261d17">Congratulations, ${safeName}.</h1><p style="margin:0 0 14px;font-size:16px;line-height:1.7">Your RSVP DXB membership application has been approved, and your member account is now active.</p><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0;background:#f5ead9;border:1px solid #e6d2b5;border-radius:10px"><tr><td style="padding:15px 17px;color:#766b60;font-size:13px">Membership track</td><td align="right" style="padding:15px 17px;color:#2d241d;font-size:14px;font-weight:700">${safeTrack}</td></tr></table><p style="margin:0;color:#544a42;font-size:15px;line-height:1.75">Sign in with the email address and password you used when applying to explore curated events and access your member features.</p><p style="margin:26px 0 8px"><a href="${htmlEscape(signInUrl)}" style="display:inline-block;padding:14px 23px;border-radius:8px;background:#80512f;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Sign in to your account&nbsp; →</a></p><p style="margin:24px 0 0;color:#544a42;font-size:14px;line-height:1.7">We look forward to welcoming you to the RSVP DXB community.<br><strong style="color:#2d241d">The RSVP DXB Membership Team</strong></p></section><footer style="padding:18px 30px;background:#f7efe4;border-top:1px solid #eee1d0;color:#82776d;font-size:11px;line-height:1.65">You received this message because your RSVP DXB membership application was approved. If you need help accessing your account, contact <a href="mailto:hello@rsvpdxb.com" style="color:#80512f">hello@rsvpdxb.com</a>.<br><span style="color:#a0978e">© RSVP DXB · Dubai, UAE</span></footer></main></body></html>`;
+
+  try {
+    const ses = new SESClient({ region });
+    await ses.send(new SendEmailCommand({
+      Source: from,
+      Destination: { ToAddresses: [email] },
+      Message: {
+        Subject: { Charset: "UTF-8", Data: subject },
+        Body: {
+          Text: { Charset: "UTF-8", Data: text },
+          Html: { Charset: "UTF-8", Data: html },
+        },
+      },
+    }));
+    return { status: "submitted", message: "Welcome email accepted by Amazon SES." };
+  } catch (error) {
+    return {
+      status: "failed",
+      message: `Member approved, but the welcome email could not be sent: ${String(error?.message || "Check SES credentials and permissions.").slice(0, 180)}`,
+    };
+  }
+}
+
 export async function sendRsvpDecisionEmail({ name, email, event, track, guestNames = [], deliverables = "", status }) {
   if (!email) return { status: "skipped", message: "No email address is on this RSVP." };
   const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();

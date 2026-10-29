@@ -83,7 +83,7 @@ export default function App() {
   useEffect(() => { if (!toast) return undefined; const timer = setTimeout(() => setToast(''), 3000); return () => clearTimeout(timer); }, [toast]);
 
   const navigate = (to) => { location.hash = `/${to}`; setPage(to); setMobileNav(false); setSearch(''); };
-  const act = async (fn, success) => { try { await fn(); await refresh(); setToast(success); } catch (err) { setToast(err.message); } };
+  const act = async (fn, success) => { try { const result = await fn(); await refresh(); setToast(typeof success === 'function' ? success(result) : success); } catch (err) { setToast(err.message); } };
   const signIn = async (email, password) => {
     setAuthError('');
     try {
