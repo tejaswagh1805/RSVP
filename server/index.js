@@ -778,35 +778,10 @@ app.post("/api/whatsapp/infobip/webhook", async (req, res, next) => {
         continue;
       }
       await sql`INSERT INTO ticket_requests (id, event_id, phone, guest_name, amount, currency) VALUES (${id}, ${event.id}, ${phone}, ${text(item.contact?.name, 120)}, ${amount}, ${currency}) ON CONFLICT (id) DO NOTHING`;
-      if (amount <= 0) {
-        await sendInfobipWhatsApp(phone, `Your request for ${event.title} is received. This event is currently free; the team will confirm your ticket.`);
-        continue;
-      }
-      try {
-        const checkout = await createStripeCheckout({ requestId: id, event, amount, currency });
-        await sql`UPDATE ticket_requests SET status = 'awaiting_payment', stripe_session_id = ${checkout.id} WHERE id = ${id} AND status = 'pending'`;
-        const guestName = text(item.contact?.name, 120);
-        const apiHost = String(process.env.PUBLIC_API_URL || "https://d1f5sjkm09kt76.cloudfront.net").replace(/\/$/, "");
-        const shortCheckoutUrl = `${apiHost}/api/pay/${encodeURIComponent(id)}`;
-        try {
-          await sendInfobipWhatsAppPayment(phone, shortCheckoutUrl, event, guestName, amount, currency);
-        } catch (error) {
-          console.error("Infobip payment button send failed:", error?.message || error);
-          const details = [
-            `Ticket checkout: ${event.title}`,
-            `Date: ${event.date}${event.time ? ` · ${event.time}` : ""}`,
-            event.venue ? `Venue: ${event.venue}` : "",
-            guestName ? `Guest: ${guestName}` : "",
-            `Total: ${amount.toFixed(2)} ${currency}`,
-            `Pay securely: ${shortCheckoutUrl}`,
-            "Your PDF ticket will be sent here after payment is confirmed.",
-          ].filter(Boolean).join("\n");
-          await sendInfobipWhatsApp(phone, details);
-        }
-      } catch (error) {
-        console.error("Stripe Checkout creation failed:", error?.message || error);
-        await sendInfobipWhatsApp(phone, `Your request for ${event.title} is saved, but checkout could not be started. Please contact the RSVP DXB team.`);
-      }
+      const priceNote = amount > 0
+        ? ` If approved, we’ll send a secure ${amount.toFixed(2)} ${currency} payment link here. Your ticket is delivered after payment.`
+        : " If approved, your ticket will be sent here.";
+      await sendInfobipWhatsApp(phone, `Your ticket request for ${event.title} has been received. The RSVP DXB team will review it.${priceNote}`);
     }
     res.sendStatus(200);
   } catch (error) {
@@ -826,14 +801,54 @@ app.post("/api/ticket-requests/:id/approve", async (req, res, next) => {
   try {
     if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to approve ticket requests." });
     if (!sql) return res.status(503).json({ error: "Ticket delivery requires the connected database." });
-    const rows = await sql`UPDATE ticket_requests r SET status = 'approved', ticket_token = COALESCE(r.ticket_token, ${randomBytes(24).toString("hex")}) FROM events e WHERE r.id = ${req.params.id} AND r.event_id = e.id AND r.amount = 0 AND r.status IN ('pending', 'approved') RETURNING r.id, r.phone, r.status, r.ticket_token AS "ticketToken", r.ticket_delivered_at AS "ticketDeliveredAt", e.title AS "eventTitle"`;
-    const ticket = rows[0];
-    if (!ticket) return res.status(409).json({ error: "Only a pending free ticket request can be approved here. Paid tickets are issued after Stripe confirms payment." });
-    if (ticket.ticketDeliveredAt) return res.json({ status: ticket.status, ticketDeliveredAt: ticket.ticketDeliveredAt, message: "Ticket was already sent." });
     const host = String(process.env.PUBLIC_API_URL || "https://d1f5sjkm09kt76.cloudfront.net").replace(/\/$/, "");
-    await sendInfobipTicket(ticket.phone, `${host}/api/tickets/${ticket.ticketToken}.pdf`, `RSVP-DXB-${ticket.id}.pdf`, `Your free ticket for ${ticket.eventTitle} is confirmed.`);
-    const delivered = await sql`UPDATE ticket_requests SET ticket_delivered_at = NOW() WHERE id = ${ticket.id} RETURNING ticket_delivered_at AS "ticketDeliveredAt"`;
-    res.json({ status: ticket.status, ticketDeliveredAt: delivered[0]?.ticketDeliveredAt, message: "Approved and PDF ticket sent to the guest's WhatsApp." });
+    const requests = await sql`SELECT r.id, r.phone, r.guest_name AS "guestName", r.amount, r.currency, r.status,
+      r.ticket_token AS "ticketToken", r.ticket_delivered_at AS "ticketDeliveredAt", r.stripe_session_id AS "stripeSessionId",
+      e.id AS "eventId", e.title AS "eventTitle", e.date::text AS date, e.time, e.venue, e.image_data AS "imageData"
+      FROM ticket_requests r JOIN events e ON e.id = r.event_id WHERE r.id = ${req.params.id} LIMIT 1`;
+    const request = requests[0];
+    if (!request) return res.status(404).json({ error: "Ticket request not found." });
+
+    if (Number(request.amount) > 0) {
+      if (request.status === "paid" && request.ticketToken && !request.ticketDeliveredAt) {
+        await sendInfobipTicket(request.phone, `${host}/api/tickets/${request.ticketToken}.pdf`, `RSVP-DXB-${request.id}.pdf`, `Payment received for ${request.eventTitle}. Your ticket is attached.`);
+        const delivered = await sql`UPDATE ticket_requests SET ticket_delivered_at = NOW() WHERE id = ${request.id} RETURNING ticket_delivered_at AS "ticketDeliveredAt"`;
+        return res.json({ status: "paid", ticketDeliveredAt: delivered[0]?.ticketDeliveredAt, message: "Paid ticket PDF sent to WhatsApp." });
+      }
+      if (request.status === "paid") return res.json({ status: "paid", ticketDeliveredAt: request.ticketDeliveredAt, message: "Ticket was already sent." });
+      if (!["pending", "awaiting_payment"].includes(request.status)) return res.status(409).json({ error: `This request is ${request.status} and cannot be approved.` });
+
+      let checkoutUrl = `${host}/api/pay/${encodeURIComponent(request.id)}`;
+      if (request.status === "pending") {
+        const checkout = await createStripeCheckout({ requestId: request.id, event: request, amount: request.amount, currency: request.currency });
+        const saved = await sql`UPDATE ticket_requests SET status = 'awaiting_payment', stripe_session_id = ${checkout.id}
+          WHERE id = ${request.id} AND status = 'pending' RETURNING id`;
+        if (!saved[0]) return res.status(409).json({ error: "This ticket request was updated by another admin. Refresh the request list." });
+      } else if (!request.stripeSessionId) {
+        return res.status(409).json({ error: "The payment link is missing. Reopen the request and approve it again." });
+      }
+      await sendInfobipWhatsAppPayment(request.phone, checkoutUrl, request, request.guestName, request.amount, request.currency);
+      return res.json({ status: "awaiting_payment", message: "Approved. A secure payment link was sent on WhatsApp; the ticket PDF is sent after payment." });
+    }
+
+    if (!["pending", "approved"].includes(request.status)) return res.status(409).json({ error: `This request is ${request.status} and cannot be approved.` });
+    if (!request.ticketToken) {
+      const token = randomBytes(24).toString("hex");
+      const updated = await sql`UPDATE ticket_requests SET status = 'approved', ticket_token = ${token}
+        WHERE id = ${request.id} AND status = 'pending' AND ticket_token IS NULL
+        RETURNING ticket_token AS "ticketToken"`;
+      request.ticketToken = updated[0]?.ticketToken;
+    }
+    if (!request.ticketToken) {
+      const current = await sql`SELECT ticket_token AS "ticketToken", ticket_delivered_at AS "ticketDeliveredAt" FROM ticket_requests WHERE id = ${request.id} LIMIT 1`;
+      request.ticketToken = current[0]?.ticketToken;
+      request.ticketDeliveredAt = current[0]?.ticketDeliveredAt;
+    }
+    if (!request.ticketToken) return res.status(409).json({ error: "Could not issue a ticket token. Refresh and try again." });
+    if (request.ticketDeliveredAt) return res.json({ status: request.status, ticketDeliveredAt: request.ticketDeliveredAt, message: "Ticket was already sent." });
+    await sendInfobipTicket(request.phone, `${host}/api/tickets/${request.ticketToken}.pdf`, `RSVP-DXB-${request.id}.pdf`, `Your ticket for ${request.eventTitle} is confirmed.`);
+    const delivered = await sql`UPDATE ticket_requests SET status = 'approved', ticket_delivered_at = NOW() WHERE id = ${request.id} RETURNING ticket_delivered_at AS "ticketDeliveredAt"`;
+    res.json({ status: "approved", ticketDeliveredAt: delivered[0]?.ticketDeliveredAt, message: "Approved and ticket PDF sent to the guest's WhatsApp." });
   } catch (error) { next(error); }
 });
 app.get("/api/auth/me", async (req, res, next) => {
@@ -1556,6 +1571,40 @@ app.get("/api/event-rsvp-requests", async (req, res, next) => {
         r.created_at DESC
     `;
     res.json(rows);
+  } catch (error) { next(error); }
+});
+
+app.get("/api/event-ticket-inquiries", async (req, res, next) => {
+  try {
+    if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to view ticket inquiries." });
+    const eventId = text(req.query.eventId, 180);
+    if (!eventId) return res.status(400).json({ error: "Choose an event." });
+    if (!sql) return res.json([]);
+    const rows = await sql`
+      SELECT id, event_id AS "eventId", full_name AS name, email, phone, status,
+        created_at AS "createdAt"
+      FROM event_ticket_inquiries
+      WHERE event_id = ${eventId}
+      ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'contacted' THEN 1 ELSE 2 END, created_at DESC
+    `;
+    res.json(rows);
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/event-ticket-inquiries/:id", async (req, res, next) => {
+  try {
+    if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to update ticket inquiries." });
+    const status = String(req.body.status || "");
+    if (!["pending", "contacted", "closed"].includes(status))
+      return res.status(400).json({ error: "Choose pending, contacted, or closed." });
+    if (!sql) return res.status(404).json({ error: "Ticket inquiry not found." });
+    const rows = await sql`
+      UPDATE event_ticket_inquiries SET status = ${status}
+      WHERE id = ${req.params.id}
+      RETURNING id, event_id AS "eventId", full_name AS name, email, phone, status, created_at AS "createdAt"
+    `;
+    if (!rows[0]) return res.status(404).json({ error: "Ticket inquiry not found." });
+    res.json(rows[0]);
   } catch (error) { next(error); }
 });
 

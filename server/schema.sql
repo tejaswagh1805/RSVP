@@ -280,6 +280,17 @@ CREATE TABLE IF NOT EXISTS ticket_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   checked_in_at TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS event_ticket_inquiries (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'contacted', 'closed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS event_ticket_inquiries_event_created_idx
+  ON event_ticket_inquiries(event_id, created_at DESC);
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS stripe_session_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_token TEXT UNIQUE;
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;

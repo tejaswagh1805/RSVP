@@ -11,6 +11,7 @@
     "build": "vite build",
     "start": "node server/index.js",
     "db:setup": "node server/setup-db.js",
+    "db:migrate": "node server/migrate-ticket-inquiries.js",
     "db:import-members": "node server/import-members.js",
     "admin:reset-password": "node server/reset-admin-password.js"
   },

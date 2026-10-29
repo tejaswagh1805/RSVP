@@ -49,6 +49,8 @@ export const api = {
   walkIn: (guest) => request('/door/walk-ins', { method: 'POST', body: JSON.stringify(guest) }),
   guestInvitations: (eventId) => request(`/guest-invitations?eventId=${encodeURIComponent(eventId)}`),
   eventRsvpRequests: (eventId) => request(`/event-rsvp-requests?eventId=${encodeURIComponent(eventId)}`),
+  eventTicketInquiries: (eventId) => request(`/event-ticket-inquiries?eventId=${encodeURIComponent(eventId)}`),
+  updateEventTicketInquiry: (id, status) => request(`/event-ticket-inquiries/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   decideEventRsvp: (id, status) => request(`/event-rsvp-requests/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   createGuestInvitation: (guest) => request('/guest-invitations', { method: 'POST', body: JSON.stringify(guest) }),
   checkInGuestInvitation: (id) => request(`/door/guest-invitations/${encodeURIComponent(id)}/check-in`, { method: 'POST' }),
