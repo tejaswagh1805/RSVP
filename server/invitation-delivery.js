@@ -44,11 +44,11 @@ const providerMessage = async (response, provider) => {
 export async function sendInvitationEmail({ guestName, email, event, invitationUrl, tableNo }) {
   if (!email) return { status: "skipped", message: "No email address was provided." };
   const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
-  const from = String(process.env.SES_FROM_EMAIL || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <vinitahirani@rsvpdxb.com>";
   if (!region || !from)
     return {
       status: "not_configured",
-      message: "Email delivery is not configured. Set SES_REGION and SES_FROM_EMAIL.",
+      message: "Email delivery is not configured. Set SES_REGION or AWS_REGION.",
     };
 
   const title = String(event.title || "You're invited");
@@ -102,11 +102,11 @@ export async function sendInvitationEmail({ guestName, email, event, invitationU
 export async function sendMembershipApprovalEmail({ name, email, track }) {
   if (!email) return { status: "skipped", message: "No email address is on this application." };
   const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
-  const from = String(process.env.SES_FROM_EMAIL || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <vinitahirani@rsvpdxb.com>";
   if (!region || !from)
     return {
       status: "not_configured",
-      message: "Member approved, but email delivery is not configured (SES_REGION / SES_FROM_EMAIL).",
+      message: "Member approved, but email delivery is not configured (SES_REGION / AWS_REGION).",
     };
 
   const safeName = htmlEscape(name || "there");
@@ -156,7 +156,7 @@ export async function sendMembershipApprovalEmail({ name, email, track }) {
 export async function sendRsvpDecisionEmail({ name, email, event, track, guestNames = [], deliverables = "", status }) {
   if (!email) return { status: "skipped", message: "No email address is on this RSVP." };
   const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
-  const from = String(process.env.SES_FROM_EMAIL || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <vinitahirani@rsvpdxb.com>";
   if (!region || !from) return { status: "not_configured", message: "Email delivery is not configured." };
 
   const eventDetails = invitationEventDetails(event);
