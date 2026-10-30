@@ -1019,7 +1019,7 @@ app.get("/api/newsletter", async (_req, res, next) => {
       sql`SELECT COUNT(*) FILTER (WHERE active = TRUE AND consented_at IS NOT NULL)::int AS active, COUNT(*) FILTER (WHERE active = FALSE)::int AS inactive FROM newsletter_subscribers`,
       sql`SELECT id, subject, image_url AS "imageUrl", event_id AS "eventId", event_title AS "eventTitle", status, recipient_count AS "recipientCount", sent_count AS "sentCount", failed_count AS "failedCount", created_by AS "createdBy", created_at AS "createdAt", completed_at AS "completedAt" FROM newsletter_campaigns ORDER BY created_at DESC LIMIT 20`,
     ]);
-    const siteUrl = String(process.env.PUBLIC_SITE_URL || "https://www.rsvpdxb.com").replace(/\/$/, "");
+    const siteUrl = String(process.env.NEWSLETTER_PUBLIC_SITE_URL || "https://rsvpdxb.com").replace(/\/$/, "");
     res.json({ active: counts[0]?.active || 0, inactive: counts[0]?.inactive || 0, campaigns, siteUrl });
   } catch (error) { next(error); }
 });
@@ -1044,14 +1044,14 @@ app.post("/api/newsletter/campaigns", async (req, res, next) => {
     }
     let event = null;
     if (eventId) {
-      event = (await sql`SELECT id, title FROM events WHERE id = ${eventId} AND status = 'published' LIMIT 1`)[0] || null;
+      event = (await sql`SELECT id, title, date::text AS date, time, venue FROM events WHERE id = ${eventId} AND status = 'published' LIMIT 1`)[0] || null;
       if (!event) return res.status(400).json({ error: "Choose a currently published event for this campaign." });
     }
     const recipients = await sql`SELECT email, unsubscribe_token AS "unsubscribeToken" FROM newsletter_subscribers WHERE active = TRUE AND consented_at IS NOT NULL AND unsubscribe_token IS NOT NULL ORDER BY email`;
     if (!recipients.length) return res.status(400).json({ error: "There are no opted-in subscribers to send to." });
 
     const campaignId = `newsletter-${randomBytes(16).toString("hex")}`;
-    const siteUrl = String(process.env.PUBLIC_SITE_URL || "https://www.rsvpdxb.com").replace(/\/$/, "");
+    const siteUrl = String(process.env.NEWSLETTER_PUBLIC_SITE_URL || "https://rsvpdxb.com").replace(/\/$/, "");
     const eventUrl = event ? `${siteUrl}/events/${encodeURIComponent(event.id)}` : "";
     await sql`INSERT INTO newsletter_campaigns (id, subject, body, image_url, event_id, event_title, status, recipient_count, created_by) VALUES (${campaignId}, ${subject}, ${body}, ${imageUrl}, ${event?.id || ""}, ${event?.title || ""}, 'queued', ${recipients.length}, ${req.admin.email})`;
     await sql`INSERT INTO newsletter_campaign_deliveries (campaign_id, email) SELECT ${campaignId}, email FROM newsletter_subscribers WHERE active = TRUE AND consented_at IS NOT NULL AND unsubscribe_token IS NOT NULL`;
@@ -1063,7 +1063,7 @@ app.post("/api/newsletter/campaigns", async (req, res, next) => {
         const recipient = recipients[cursor++];
         const unsubscribeUrl = `${siteUrl}/unsubscribe?token=${recipient.unsubscribeToken}`;
         try {
-          await sendNewsletterCampaignEmail({ email: recipient.email, subject, body, imageUrl, eventUrl, eventTitle: event?.title || "", unsubscribeUrl });
+          await sendNewsletterCampaignEmail({ email: recipient.email, subject, body, imageUrl, eventUrl, eventTitle: event?.title || "", eventDate: event?.date || "", eventTime: event?.time || "", eventVenue: event?.venue || "", unsubscribeUrl });
           await sql`UPDATE newsletter_campaign_deliveries SET status = 'sent', sent_at = NOW(), error = '' WHERE campaign_id = ${campaignId} AND email = ${recipient.email}`;
           await sql`UPDATE newsletter_campaigns SET sent_count = sent_count + 1 WHERE id = ${campaignId}`;
         } catch (deliveryError) {
