@@ -1019,7 +1019,7 @@ app.get("/api/newsletter", async (_req, res, next) => {
       sql`SELECT COUNT(*) FILTER (WHERE active = TRUE AND consented_at IS NOT NULL)::int AS active, COUNT(*) FILTER (WHERE active = FALSE)::int AS inactive FROM newsletter_subscribers`,
       sql`SELECT id, subject, image_url AS "imageUrl", event_id AS "eventId", event_title AS "eventTitle", status, recipient_count AS "recipientCount", sent_count AS "sentCount", failed_count AS "failedCount", created_by AS "createdBy", created_at AS "createdAt", completed_at AS "completedAt" FROM newsletter_campaigns ORDER BY created_at DESC LIMIT 20`,
     ]);
-    const siteUrl = String(process.env.NEWSLETTER_PUBLIC_SITE_URL || "https://rsvpdxb.com").replace(/\/$/, "");
+    const siteUrl = String(process.env.NEWSLETTER_PUBLIC_SITE_URL || "https://www.rsvpdxb.com").replace(/\/$/, "");
     res.json({ active: counts[0]?.active || 0, inactive: counts[0]?.inactive || 0, campaigns, siteUrl });
   } catch (error) { next(error); }
 });
@@ -1051,7 +1051,7 @@ app.post("/api/newsletter/campaigns", async (req, res, next) => {
     if (!recipients.length) return res.status(400).json({ error: "There are no opted-in subscribers to send to." });
 
     const campaignId = `newsletter-${randomBytes(16).toString("hex")}`;
-    const siteUrl = String(process.env.NEWSLETTER_PUBLIC_SITE_URL || "https://rsvpdxb.com").replace(/\/$/, "");
+    const siteUrl = String(process.env.NEWSLETTER_PUBLIC_SITE_URL || "https://www.rsvpdxb.com").replace(/\/$/, "");
     const eventUrl = event ? `${siteUrl}/events/${encodeURIComponent(event.id)}` : "";
     await sql`INSERT INTO newsletter_campaigns (id, subject, body, image_url, event_id, event_title, status, recipient_count, created_by) VALUES (${campaignId}, ${subject}, ${body}, ${imageUrl}, ${event?.id || ""}, ${event?.title || ""}, 'queued', ${recipients.length}, ${req.admin.email})`;
     await sql`INSERT INTO newsletter_campaign_deliveries (campaign_id, email) SELECT ${campaignId}, email FROM newsletter_subscribers WHERE active = TRUE AND consented_at IS NOT NULL AND unsubscribe_token IS NOT NULL`;
