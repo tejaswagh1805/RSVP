@@ -7,8 +7,7 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
 })[character]);
 
 export async function sendNewsletterCampaignEmail({ email, subject, body, imageUrl = '', unsubscribeUrl }) {
-  const from = String(process.env.SES_FROM_EMAIL || "").trim();
-  if (!from) throw new Error("Set SES_FROM_EMAIL in the admin server environment before sending campaigns.");
+  const from = String(process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <vinitahirani@rsvpdxb.com>";
 
   const paragraphs = body.split(/\n{2,}/).map((paragraph) =>
     `<p style="margin:0 0 16px;line-height:1.7">${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`,

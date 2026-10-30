@@ -1040,9 +1040,6 @@ app.post("/api/newsletter/campaigns", async (req, res, next) => {
         if (image.protocol !== "https:" || image.origin !== mediaBase.origin || !image.pathname.startsWith(mediaPath) || image.username || image.password) throw new Error();
       } catch { return res.status(400).json({ error: "Campaign images must be uploaded to the configured secure media storage." }); }
     }
-    const from = String(process.env.SES_FROM_EMAIL || "").trim();
-    if (!from) return res.status(503).json({ error: "Email is not configured. Set SES_FROM_EMAIL in the admin server environment." });
-
     const recipients = await sql`SELECT email, unsubscribe_token AS "unsubscribeToken" FROM newsletter_subscribers WHERE active = TRUE AND consented_at IS NOT NULL AND unsubscribe_token IS NOT NULL ORDER BY email`;
     if (!recipients.length) return res.status(400).json({ error: "There are no opted-in subscribers to send to." });
 
