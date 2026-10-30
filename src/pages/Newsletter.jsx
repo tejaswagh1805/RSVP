@@ -16,6 +16,7 @@ function normalizeAudience(payload) {
       inactive: validCounts ? inactive : 0,
       campaigns: validCampaigns ? payload.campaigns : [],
     },
+    siteUrl: payload?.siteUrl,
     valid: validCounts && validCampaigns,
   };
 }
@@ -23,6 +24,9 @@ function normalizeAudience(payload) {
 export default function Newsletter() {
   const [audience, setAudience] = useState({ active: 0, inactive: 0, campaigns: [] });
   const [form, setForm] = useState(initialForm);
+  const [events, setEvents] = useState([]);
+  const [eventId, setEventId] = useState('');
+  const [siteUrl, setSiteUrl] = useState('https://www.rsvpdxb.com');
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
   const [loading, setLoading] = useState(true);
@@ -35,6 +39,7 @@ export default function Newsletter() {
     try {
       const result = normalizeAudience(await api.newsletter());
       setAudience(result.audience);
+      if (typeof result.siteUrl === 'string' && result.siteUrl) setSiteUrl(result.siteUrl.replace(/\/$/, ''));
       if (!result.valid) setError('Newsletter data is incomplete. Check that the admin API and database migrations are up to date.');
     }
     catch (loadError) { setError(loadError.message || 'Could not load newsletter details.'); }
@@ -43,7 +48,18 @@ export default function Newsletter() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  useEffect(() => {
+    let active = true;
+    api.list('events').then((rows) => {
+      if (active) setEvents(Array.isArray(rows) ? rows.filter((event) => event.status === 'published') : []);
+    }).catch(() => { if (active) setEvents([]); });
+    return () => { active = false; };
+  }, []);
+
   useEffect(() => () => { if (imagePreview) URL.revokeObjectURL(imagePreview); }, [imagePreview]);
+
+  const selectedEvent = events.find((event) => event.id === eventId);
+  const eventUrl = selectedEvent ? `${siteUrl}/events/${encodeURIComponent(selectedEvent.id)}` : '';
 
   function chooseImage(file) {
     setError('');
@@ -70,9 +86,10 @@ export default function Newsletter() {
         if (!response.ok) throw new Error('Image upload failed. Check that media storage is configured.');
         imageUrl = upload.publicUrl;
       }
-      const { campaign = {} } = await api.sendNewsletterCampaign({ ...form, imageUrl, confirmSend: true });
+      const { campaign = {} } = await api.sendNewsletterCampaign({ ...form, imageUrl, eventId, confirmSend: true });
       setNotice(`Campaign finished: ${campaign.sentCount} sent, ${campaign.failedCount} failed.`);
       setForm(initialForm);
+      setEventId('');
       setImageFile(null); setImagePreview('');
       await refresh();
     } catch (sendError) {
@@ -94,6 +111,8 @@ export default function Newsletter() {
       <div className="newsletter-heading"><div><span className="eyebrow"><Send size={12} /> NEW CAMPAIGN</span><h2>Compose an update</h2><p>Sending starts when you confirm. The site sends to opted-in addresses individually through Amazon SES.</p></div></div>
       <form onSubmit={sendCampaign}>
         <label className="field"><span>Subject *</span><input required minLength="4" maxLength="140" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} placeholder="What’s new at RSVP DXB?" /></label>
+        <label className="field newsletter-event-field"><span>Link this campaign to an event (optional)</span><select value={eventId} onChange={(event) => setEventId(event.target.value)}><option value="">No event link</option>{events.map((item) => <option key={item.id} value={item.id}>{item.title}{item.date ? ` · ${item.date}` : ''}</option>)}</select><small>Choosing an event makes the campaign poster clickable and adds a prominent event and RSVP button to the email.</small></label>
+        {selectedEvent ? <div className="newsletter-event-preview"><CheckCircle2 size={15} /><span>Email links will open <strong>{selectedEvent.title}</strong>.</span><a href={eventUrl} target="_blank" rel="noreferrer">Preview event ↗</a></div> : null}
         <label className="field"><span>Email message *</span><textarea required minLength="20" maxLength="10000" rows="9" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder={'Write your update here.\n\nSeparate paragraphs with a blank line.'} /></label>
         <div className="field newsletter-image-field"><span>Campaign image (optional)</span><label className="newsletter-image-picker"><ImagePlus size={16} /><span>{imageFile ? imageFile.name : 'Add a JPG, PNG or WebP image'}</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { chooseImage(event.target.files?.[0] || null); event.target.value = ''; }} /></label><small>Up to 12 MB. The image appears below the subject in the email. Use a wide, high-resolution image and include key details in the message text too.</small>{imagePreview ? <div className="newsletter-image-preview"><img src={imagePreview} alt="Newsletter campaign preview" /><button type="button" aria-label="Remove campaign image" onClick={() => chooseImage(null)}><X size={15} /></button></div> : null}</div>
         <p className="newsletter-send-note"><AlertCircle size={14} /> Only subscribers with recorded consent are included. Every campaign includes an unsubscribe link.</p>
@@ -106,7 +125,7 @@ export default function Newsletter() {
     <section className="newsletter-history">
       <div className="newsletter-section-heading"><h2>Recent campaigns</h2><span>Last 20</span></div>
       <div className="panel table-panel table-scroll"><table><thead><tr><th>SUBJECT</th><th>STATUS</th><th>RECIPIENTS</th><th>SENT</th><th>FAILED</th><th>DATE</th></tr></thead><tbody>
-        {(Array.isArray(audience.campaigns) ? audience.campaigns : []).map((campaign) => <tr key={campaign.id}><td><strong>{campaign.subject}</strong></td><td><span className={`status-tag status-${campaign.status === 'sent' ? 'approved' : campaign.status === 'failed' || campaign.status === 'partial' ? 'rejected' : 'pending'}`}>{campaign.status}</span></td><td>{campaign.recipientCount}</td><td>{campaign.sentCount}</td><td>{campaign.failedCount}</td><td>{new Date(campaign.createdAt).toLocaleString()}</td></tr>)}
+        {(Array.isArray(audience.campaigns) ? audience.campaigns : []).map((campaign) => <tr key={campaign.id}><td><strong>{campaign.subject}</strong>{campaign.eventTitle ? <small className="newsletter-history-event">Event: {campaign.eventTitle}</small> : null}</td><td><span className={`status-tag status-${campaign.status === 'sent' ? 'approved' : campaign.status === 'failed' || campaign.status === 'partial' ? 'rejected' : 'pending'}`}>{campaign.status}</span></td><td>{campaign.recipientCount}</td><td>{campaign.sentCount}</td><td>{campaign.failedCount}</td><td>{new Date(campaign.createdAt).toLocaleString()}</td></tr>)}
       </tbody></table>{!loading && (!Array.isArray(audience.campaigns) || audience.campaigns.length === 0) ? <EmptyState title="No campaigns sent yet" detail="Your sent newsletter campaigns will appear here." /> : null}</div>
     </section>
   </>;
