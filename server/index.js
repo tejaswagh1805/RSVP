@@ -25,6 +25,7 @@ import { createTicketPdf } from "./ticket-pdf.js";
 import { S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { sendNewsletterCampaignEmail } from "./newsletter.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -1009,6 +1010,70 @@ app.use("/api", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.get("/api/newsletter", async (_req, res, next) => {
+  try {
+    if (!sql) return res.status(503).json({ error: "Newsletter campaigns require the connected production database." });
+    const [counts, campaigns] = await Promise.all([
+      sql`SELECT COUNT(*) FILTER (WHERE active = TRUE AND consented_at IS NOT NULL)::int AS active, COUNT(*) FILTER (WHERE active = FALSE)::int AS inactive FROM newsletter_subscribers`,
+      sql`SELECT id, subject, image_url AS "imageUrl", status, recipient_count AS "recipientCount", sent_count AS "sentCount", failed_count AS "failedCount", created_by AS "createdBy", created_at AS "createdAt", completed_at AS "completedAt" FROM newsletter_campaigns ORDER BY created_at DESC LIMIT 20`,
+    ]);
+    res.json({ active: counts[0]?.active || 0, inactive: counts[0]?.inactive || 0, campaigns });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/newsletter/campaigns", async (req, res, next) => {
+  try {
+    if (!sql) return res.status(503).json({ error: "Newsletter campaigns require the connected production database." });
+    if (req.body.confirmSend !== true) return res.status(400).json({ error: "Confirm that this campaign should be emailed to all active subscribers." });
+    const subject = text(req.body.subject, 140);
+    const body = String(req.body.body || "").trim().slice(0, 10000);
+    const imageUrl = String(req.body.imageUrl || "").trim();
+    if (subject.length < 4) return res.status(400).json({ error: "Enter a subject with at least 4 characters." });
+    if (body.length < 20) return res.status(400).json({ error: "Enter a message with at least 20 characters." });
+    if (imageUrl) {
+      try {
+        const image = new URL(imageUrl);
+        const mediaBase = new URL(mediaBaseUrl);
+        const mediaPath = `${mediaBase.pathname.replace(/\/$/, "")}/media/`;
+        if (image.protocol !== "https:" || image.origin !== mediaBase.origin || !image.pathname.startsWith(mediaPath) || image.username || image.password) throw new Error();
+      } catch { return res.status(400).json({ error: "Campaign images must be uploaded to the configured secure media storage." }); }
+    }
+    const from = String(process.env.SES_FROM_EMAIL || "").trim();
+    if (!from) return res.status(503).json({ error: "Email is not configured. Set SES_FROM_EMAIL in the admin server environment." });
+
+    const recipients = await sql`SELECT email, unsubscribe_token AS "unsubscribeToken" FROM newsletter_subscribers WHERE active = TRUE AND consented_at IS NOT NULL AND unsubscribe_token IS NOT NULL ORDER BY email`;
+    if (!recipients.length) return res.status(400).json({ error: "There are no opted-in subscribers to send to." });
+
+    const campaignId = `newsletter-${randomBytes(16).toString("hex")}`;
+    await sql`INSERT INTO newsletter_campaigns (id, subject, body, image_url, status, recipient_count, created_by) VALUES (${campaignId}, ${subject}, ${body}, ${imageUrl}, 'queued', ${recipients.length}, ${req.admin.email})`;
+    await sql`INSERT INTO newsletter_campaign_deliveries (campaign_id, email) SELECT ${campaignId}, email FROM newsletter_subscribers WHERE active = TRUE AND consented_at IS NOT NULL AND unsubscribe_token IS NOT NULL`;
+    await sql`UPDATE newsletter_campaigns SET status = 'sending' WHERE id = ${campaignId}`;
+
+    const siteUrl = String(process.env.PUBLIC_SITE_URL || "https://rsvpdxb.com").replace(/\/$/, "");
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(3, recipients.length) }, async () => {
+      while (cursor < recipients.length) {
+        const recipient = recipients[cursor++];
+        const unsubscribeUrl = `${siteUrl}/unsubscribe?token=${recipient.unsubscribeToken}`;
+        try {
+          await sendNewsletterCampaignEmail({ email: recipient.email, subject, body, imageUrl, unsubscribeUrl });
+          await sql`UPDATE newsletter_campaign_deliveries SET status = 'sent', sent_at = NOW(), error = '' WHERE campaign_id = ${campaignId} AND email = ${recipient.email}`;
+          await sql`UPDATE newsletter_campaigns SET sent_count = sent_count + 1 WHERE id = ${campaignId}`;
+        } catch (deliveryError) {
+          const message = String(deliveryError?.message || "Email send failed.").slice(0, 500);
+          await sql`UPDATE newsletter_campaign_deliveries SET status = 'failed', error = ${message} WHERE campaign_id = ${campaignId} AND email = ${recipient.email}`;
+          await sql`UPDATE newsletter_campaigns SET failed_count = failed_count + 1 WHERE id = ${campaignId}`;
+        }
+      }
+    });
+    await Promise.all(workers);
+    const failedCount = recipients.length - (await sql`SELECT COUNT(*)::int AS sent FROM newsletter_campaign_deliveries WHERE campaign_id = ${campaignId} AND status = 'sent'`)[0].sent;
+    const status = failedCount === 0 ? "sent" : failedCount === recipients.length ? "failed" : "partial";
+    const completed = await sql`UPDATE newsletter_campaigns SET status = ${status}, failed_count = ${failedCount}, completed_at = NOW() WHERE id = ${campaignId} RETURNING id, subject, image_url AS "imageUrl", status, recipient_count AS "recipientCount", sent_count AS "sentCount", failed_count AS "failedCount", created_at AS "createdAt", completed_at AS "completedAt"`;
+    res.status(201).json({ campaign: completed[0] });
+  } catch (error) { next(error); }
 });
 
 const getMobileToken = (req) => {

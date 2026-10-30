@@ -1,0 +1,113 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Mail, Send, Users, AlertCircle, CheckCircle2, ImagePlus, X } from 'lucide-react';
+import { api } from '../api.js';
+import { PageIntro, EmptyState } from '../components/UI.jsx';
+
+const initialForm = { subject: '', body: '' };
+
+function normalizeAudience(payload) {
+  const active = Number(payload?.active);
+  const inactive = Number(payload?.inactive);
+  const validCounts = Number.isFinite(active) && active >= 0 && Number.isFinite(inactive) && inactive >= 0;
+  const validCampaigns = Array.isArray(payload?.campaigns);
+  return {
+    audience: {
+      active: validCounts ? active : 0,
+      inactive: validCounts ? inactive : 0,
+      campaigns: validCampaigns ? payload.campaigns : [],
+    },
+    valid: validCounts && validCampaigns,
+  };
+}
+
+export default function Newsletter() {
+  const [audience, setAudience] = useState({ active: 0, inactive: 0, campaigns: [] });
+  const [form, setForm] = useState(initialForm);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const refresh = useCallback(async () => {
+    setError('');
+    try {
+      const result = normalizeAudience(await api.newsletter());
+      setAudience(result.audience);
+      if (!result.valid) setError('Newsletter data is incomplete. Check that the admin API and database migrations are up to date.');
+    }
+    catch (loadError) { setError(loadError.message || 'Could not load newsletter details.'); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => () => { if (imagePreview) URL.revokeObjectURL(imagePreview); }, [imagePreview]);
+
+  function chooseImage(file) {
+    setError('');
+    if (!file) { setImageFile(null); setImagePreview(''); return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 12 * 1024 * 1024) {
+      setError('Choose a JPG, PNG or WebP image up to 12 MB.');
+      return;
+    }
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  }
+
+  async function sendCampaign(event) {
+    event.preventDefault();
+    if (!audience.active) return;
+    const accepted = window.confirm(`Send “${form.subject.trim()}” to all ${audience.active} opted-in subscribers now? This will send real emails.`);
+    if (!accepted) return;
+    setBusy(true); setError(''); setNotice('Sending campaign… Keep this page open until the send completes.');
+    try {
+      let imageUrl = '';
+      if (imageFile) {
+        const upload = await api.mediaUploadUrl(imageFile);
+        const response = await fetch(upload.uploadUrl, { method: 'PUT', headers: { 'Content-Type': imageFile.type }, body: imageFile });
+        if (!response.ok) throw new Error('Image upload failed. Check that media storage is configured.');
+        imageUrl = upload.publicUrl;
+      }
+      const { campaign = {} } = await api.sendNewsletterCampaign({ ...form, imageUrl, confirmSend: true });
+      setNotice(`Campaign finished: ${campaign.sentCount} sent, ${campaign.failedCount} failed.`);
+      setForm(initialForm);
+      setImageFile(null); setImagePreview('');
+      await refresh();
+    } catch (sendError) {
+      setError(sendError.message || 'The campaign could not be sent.');
+      setNotice('');
+      await refresh();
+    } finally { setBusy(false); }
+  }
+
+  return <>
+    <PageIntro title="Newsletter" detail="Write and send an email campaign to subscribers who explicitly opted in. Each campaign includes an unsubscribe link." />
+    <div className="stats-grid">
+      <article className="stat-card"><div className="stat-top"><span>OPTED-IN SUBSCRIBERS</span><span className="stat-icon"><Users size={15} /></span></div><div className="stat-value">{loading ? '—' : Number(audience.active || 0).toLocaleString()}</div><div className="stat-note">Eligible for campaign email</div></article>
+      <article className="stat-card"><div className="stat-top"><span>INACTIVE / NO CONSENT</span><span className="stat-icon"><Mail size={15} /></span></div><div className="stat-value">{loading ? '—' : Number(audience.inactive || 0).toLocaleString()}</div><div className="stat-note">Excluded from campaigns</div></article>
+    </div>
+    {!loading && audience.active === 0 ? <div className="newsletter-consent-help" role="status"><AlertCircle size={16} /><p><strong>No opted-in subscribers yet.</strong> {audience.inactive === 1 ? 'The existing address was collected without recorded marketing consent, so it is excluded.' : 'Existing addresses collected without recorded marketing consent are excluded.'} Ask subscribers to sign up again through the website newsletter form and tick the consent checkbox.</p></div> : null}
+
+    <section className="panel newsletter-compose">
+      <div className="newsletter-heading"><div><span className="eyebrow"><Send size={12} /> NEW CAMPAIGN</span><h2>Compose an update</h2><p>Sending starts when you confirm. The site sends to opted-in addresses individually through Amazon SES.</p></div></div>
+      <form onSubmit={sendCampaign}>
+        <label className="field"><span>Subject *</span><input required minLength="4" maxLength="140" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} placeholder="What’s new at RSVP DXB?" /></label>
+        <label className="field"><span>Email message *</span><textarea required minLength="20" maxLength="10000" rows="9" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder={'Write your update here.\n\nSeparate paragraphs with a blank line.'} /></label>
+        <div className="field newsletter-image-field"><span>Campaign image (optional)</span><label className="newsletter-image-picker"><ImagePlus size={16} /><span>{imageFile ? imageFile.name : 'Add a JPG, PNG or WebP image'}</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { chooseImage(event.target.files?.[0] || null); event.target.value = ''; }} /></label><small>Up to 12 MB. The image appears below the subject in the email. Use a wide, high-resolution image and include key details in the message text too.</small>{imagePreview ? <div className="newsletter-image-preview"><img src={imagePreview} alt="Newsletter campaign preview" /><button type="button" aria-label="Remove campaign image" onClick={() => chooseImage(null)}><X size={15} /></button></div> : null}</div>
+        <p className="newsletter-send-note"><AlertCircle size={14} /> Only subscribers with recorded consent are included. Every campaign includes an unsubscribe link.</p>
+        {error ? <p className="newsletter-error" role="alert">{error}</p> : null}
+        {notice ? <p className="newsletter-notice" role="status"><CheckCircle2 size={15} />{notice}</p> : null}
+        <button className="button button-primary newsletter-send-button" type="submit" disabled={busy || loading || !Number(audience.active)}>{busy ? 'Sending…' : `Send campaign to ${Number(audience.active).toLocaleString()} subscriber${Number(audience.active) === 1 ? '' : 's'}`} <Send size={15} /></button>
+      </form>
+    </section>
+
+    <section className="newsletter-history">
+      <div className="newsletter-section-heading"><h2>Recent campaigns</h2><span>Last 20</span></div>
+      <div className="panel table-panel table-scroll"><table><thead><tr><th>SUBJECT</th><th>STATUS</th><th>RECIPIENTS</th><th>SENT</th><th>FAILED</th><th>DATE</th></tr></thead><tbody>
+        {(Array.isArray(audience.campaigns) ? audience.campaigns : []).map((campaign) => <tr key={campaign.id}><td><strong>{campaign.subject}</strong></td><td><span className={`status-tag status-${campaign.status === 'sent' ? 'approved' : campaign.status === 'failed' || campaign.status === 'partial' ? 'rejected' : 'pending'}`}>{campaign.status}</span></td><td>{campaign.recipientCount}</td><td>{campaign.sentCount}</td><td>{campaign.failedCount}</td><td>{new Date(campaign.createdAt).toLocaleString()}</td></tr>)}
+      </tbody></table>{!loading && (!Array.isArray(audience.campaigns) || audience.campaigns.length === 0) ? <EmptyState title="No campaigns sent yet" detail="Your sent newsletter campaigns will appear here." /> : null}</div>
+    </section>
+  </>;
+}

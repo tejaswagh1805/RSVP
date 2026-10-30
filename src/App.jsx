@@ -17,6 +17,7 @@ import Register from './pages/Register.jsx';
 import WebsiteMedia from './pages/WebsiteMedia.jsx';
 import PeopleProfiles from './pages/PeopleProfiles.jsx';
 import Venues from './pages/Venues.jsx';
+import Newsletter from './pages/Newsletter.jsx';
 
 export default function App() {
   const [page, setPage] = useState(() => location.hash.replace('#/', '') || 'dashboard');
@@ -115,6 +116,7 @@ export default function App() {
     websiteMedia: <WebsiteMedia rows={data.siteMedia} act={act} />,
     peopleProfiles: <PeopleProfiles rows={data.peopleProfiles} act={act} />,
     venues: <Venues rows={data.venues} act={act} />,
+    newsletter: <Newsletter />,
     invitations: <Invitations events={data.events} />,
     wall: <Wall rows={data.wall} act={act} />,
     clients: <Clients rows={data.clients} act={act} />,

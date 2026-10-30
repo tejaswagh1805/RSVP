@@ -17,6 +17,8 @@ export async function request(path, options = {}) {
 
 export const api = {
   me: () => request('/auth/me'),
+  newsletter: () => request('/newsletter'),
+  sendNewsletterCampaign: (campaign) => request('/newsletter/campaigns', { method: 'POST', body: JSON.stringify(campaign) }),
   login: (email, password) => request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout: () => request('/auth/logout', { method: 'POST' }),
   register: (member) => request('/register', { method: 'POST', body: JSON.stringify(member) }),

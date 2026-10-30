@@ -177,6 +177,39 @@ td strong { color: #dedbd3; font-size: 10px; font-weight: 500; }
 .status-rejected, .status-removed { border-color: #553331; background: #2d201f; color: #d79389; }
 .status-published, .status-live { border-color: #2d4936; background: #1c2a20; color: #98c3a3; }
 .status-closed { color: #a4a29b; }
+
+.newsletter-compose { padding: 22px; margin-bottom: 22px; }
+.newsletter-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+.newsletter-heading .eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 9px; letter-spacing: .13em; }
+.newsletter-heading h2, .newsletter-section-heading h2 { margin: 8px 0 5px; color: #eeeae0; font-family: 'Instrument Serif', serif; font-size: 25px; font-weight: 400; }
+.newsletter-heading p { max-width: 650px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.newsletter-compose form { max-width: 800px; }
+.newsletter-compose textarea { min-height: 180px; padding: 11px 12px; border: 1px solid #35352f; border-radius: 6px; outline: none; background: #121210; color: #e1ded6; font: 12px/1.65 'DM Sans', sans-serif; resize: vertical; }
+.newsletter-compose textarea:focus { border-color: #8c7449; }
+.newsletter-consent-help { display: flex; align-items: flex-start; gap: 10px; max-width: 800px; margin: 16px 0 22px; padding: 14px 16px; border: 1px solid #59462b; border-radius: 8px; background: #201d17; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.newsletter-consent-help svg { flex: none; margin-top: 2px; color: var(--accent); }
+.newsletter-consent-help p { margin: 0; }
+.newsletter-consent-help strong { color: #eeeae0; }
+.newsletter-image-field { margin: 18px 0; }
+.newsletter-image-picker { position: relative; display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 7px; padding: 0 13px; border: 1px dashed #625337; border-radius: 6px; color: #e5dfd2; cursor: pointer; }
+.newsletter-image-picker:hover { border-color: var(--accent); background: #201d17; }
+.newsletter-image-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.newsletter-image-picker svg { color: var(--accent); }
+.newsletter-image-field > small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.newsletter-image-preview { position: relative; width: min(100%, 560px); margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: #0e0e0d; }
+.newsletter-image-preview img { display: block; width: 100%; max-height: 300px; object-fit: contain; }
+.newsletter-image-preview button { position: absolute; top: 8px; right: 8px; display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #ffffff50; border-radius: 50%; background: #151412d9; color: #fff; cursor: pointer; }
+.newsletter-send-note, .newsletter-notice { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.newsletter-send-note svg, .newsletter-notice svg { flex: none; margin-top: 1px; }
+.newsletter-error { color: var(--red); font-size: 11px; }
+.newsletter-notice { color: var(--green); }
+.newsletter-send-button { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; padding: 0 15px; border: 0; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.newsletter-send-button:disabled { opacity: .5; cursor: not-allowed; }
+.newsletter-history { margin-top: 28px; }
+.newsletter-section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.newsletter-section-heading h2 { margin: 0; font-size: 21px; }
+.newsletter-section-heading span { color: var(--muted); font-size: 10px; }
+.newsletter-history td strong { color: #e4e0d6; font-weight: 500; }
 .application-actions, .table-actions, .wall-actions { display: flex; align-items: center; gap: 6px; }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 11px; border: 1px solid transparent; border-radius: 5px; font-size: 10px; font-weight: 500; cursor: pointer; transition: background .15s, border .15s; }
 .button-primary { background: var(--accent); color: #211b11; }
