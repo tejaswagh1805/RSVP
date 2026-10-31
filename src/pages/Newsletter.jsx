@@ -81,9 +81,7 @@ export default function Newsletter() {
     try {
       let imageUrl = '';
       if (imageFile) {
-        const upload = await api.mediaUploadUrl(imageFile);
-        const response = await fetch(upload.uploadUrl, { method: 'PUT', headers: { 'Content-Type': imageFile.type }, body: imageFile });
-        if (!response.ok) throw new Error('Image upload failed. Check that media storage is configured.');
+        const upload = await api.uploadMedia(imageFile);
         imageUrl = upload.publicUrl;
       }
       const { campaign = {} } = await api.sendNewsletterCampaign({ ...form, imageUrl, eventId, confirmSend: true });

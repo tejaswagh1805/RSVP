@@ -1,0 +1,2 @@
+ALTER TABLE site_media
+  ADD COLUMN IF NOT EXISTS captions_url TEXT NOT NULL DEFAULT '';

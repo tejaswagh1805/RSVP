@@ -487,7 +487,7 @@ const selectFor = {
   wall_posts:
     'SELECT id, brand, type, body, posted, boosted, status, event_id AS "eventId" FROM wall_posts ORDER BY created_at DESC',
   site_media:
-    'SELECT id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, \'image\') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM site_media ORDER BY slot, display_order, created_at DESC',
+    'SELECT id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, \'image\') AS "mediaType", COALESCE(captions_url, \'\') AS "captionsUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM site_media ORDER BY slot, display_order, created_at DESC',
   people_profiles:
     'SELECT id, category, name, role, subtitle, bio, image_url AS "imageUrl", object_key AS "objectKey", instagram_url AS "instagramUrl", tiktok_url AS "tiktokUrl", youtube_url AS "youtubeUrl", x_url AS "xUrl", display_order AS "displayOrder", active, created_at AS "createdAt" FROM people_profiles ORDER BY category, display_order, created_at DESC',
   venues:
@@ -848,7 +848,10 @@ app.post("/api/ticket-requests/:id/approve", async (req, res, next) => {
     }
     if (!request.ticketToken) return res.status(409).json({ error: "Could not issue a ticket token. Refresh and try again." });
     if (request.ticketDeliveredAt) return res.json({ status: request.status, ticketDeliveredAt: request.ticketDeliveredAt, message: "Ticket was already sent." });
-    await sendInfobipTicket(request.phone, `${host}/api/tickets/${request.ticketToken}.pdf`, `RSVP-DXB-${request.id}.pdf`, `Your ticket for ${request.eventTitle} is confirmed.`);
+    const eventDate = new Intl.DateTimeFormat("en-AE", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${String(request.date).slice(0, 10)}T12:00:00Z`));
+    const eventWhen = [eventDate, request.time].filter(Boolean).join(" at ");
+    const approvedCaption = `Hi ${request.guestName}, you're in. Your ticket for ${request.eventTitle} on ${eventWhen}${request.venue ? `, ${request.venue}` : ""} is approved. We'll share the next steps shortly. Dress accordingly.\n\nTeam RSVP DXB`;
+    await sendInfobipTicket(request.phone, `${host}/api/tickets/${request.ticketToken}.pdf`, `RSVP-DXB-${request.id}.pdf`, approvedCaption);
     const delivered = await sql`UPDATE ticket_requests SET status = 'approved', ticket_delivered_at = NOW() WHERE id = ${request.id} RETURNING ticket_delivered_at AS "ticketDeliveredAt"`;
     res.json({ status: "approved", ticketDeliveredAt: delivered[0]?.ticketDeliveredAt, message: "Approved and ticket PDF sent to the guest's WhatsApp." });
   } catch (error) { next(error); }
@@ -1289,9 +1292,10 @@ app.post("/api/media/upload-url", async (req, res, next) => {
     const contentType = text(req.body.contentType, 100).toLowerCase();
     const size = Number(req.body.size);
     const siteGalleryVideo = req.body.purpose === "site-gallery" && contentType.startsWith("video/");
-    const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" };
-    if (!extensions[contentType]) return res.status(400).json({ error: "Use a JPG, PNG, WebP image or MP4, WebM, MOV video." });
-    const maxBytes = contentType.startsWith("video/") ? (siteGalleryVideo ? 500 : 100) * 1024 * 1024 : 12 * 1024 * 1024;
+    const siteGalleryCaptions = req.body.purpose === "site-gallery" && contentType === "text/vtt";
+    const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "text/vtt": "vtt" };
+    if (!extensions[contentType] || (contentType === "text/vtt" && !siteGalleryCaptions)) return res.status(400).json({ error: "Use a JPG, PNG, WebP image or MP4, WebM, MOV video. Gallery captions can be uploaded as WebVTT." });
+    const maxBytes = siteGalleryCaptions ? 1024 * 1024 : contentType.startsWith("video/") ? (siteGalleryVideo ? 500 : 100) * 1024 * 1024 : 12 * 1024 * 1024;
     if (!Number.isInteger(size) || size <= 0 || size > maxBytes) return res.status(400).json({ error: `File must be smaller than ${contentType.startsWith("video/") ? `${siteGalleryVideo ? "500" : "100"} MB` : "12 MB"}.` });
     const safeName = filename.normalize("NFKD").replace(/[^a-zA-Z0-9._-]/g, "-").slice(-100) || `upload.${extensions[contentType]}`;
     // S3 has a flat keyspace; omit date prefixes so uploads appear directly in media/.
@@ -1305,6 +1309,7 @@ app.post("/api/site-media", async (req, res, next) => {
     const slot = req.body.slot === "top_pick" ? "top_pick" : req.body.slot === "gallery" ? "gallery" : "";
     const title = text(req.body.title, 180);
     const caption = text(req.body.caption, 500);
+    const captionsUrl = String(req.body.captionsUrl || "");
     const imageUrl = String(req.body.imageUrl || "");
     const mediaType = req.body.mediaType === "video" ? "video" : "image";
     const objectKey = String(req.body.objectKey || "");
@@ -1319,18 +1324,20 @@ app.post("/api/site-media", async (req, res, next) => {
     }
     const id = `site-media-${crypto.randomUUID()}`;
     const displayOrder = Math.max(0, Math.min(9999, Number(req.body.displayOrder) || 0));
-    const item = { id, slot, title, caption, imageUrl, mediaType, objectKey, linkUrl, displayOrder, active: true };
-    if (sql) await sql`INSERT INTO site_media (id, slot, title, caption, image_url, object_key, link_url, display_order, media_type) VALUES (${id}, ${slot}, ${title}, ${caption}, ${imageUrl}, ${objectKey}, ${linkUrl}, ${displayOrder}, ${mediaType})`;
+    if (captionsUrl && (mediaType !== "video" || !captionsUrl.startsWith(`${mediaBaseUrl}/media/`) || !captionsUrl.toLowerCase().endsWith(".vtt"))) return res.status(400).json({ error: "Video captions must be a WebVTT file uploaded to RSVP media storage." });
+    const item = { id, slot, title, caption, imageUrl, mediaType, captionsUrl, objectKey, linkUrl, displayOrder, active: true };
+    if (sql) await sql`INSERT INTO site_media (id, slot, title, caption, image_url, object_key, link_url, display_order, media_type, captions_url) VALUES (${id}, ${slot}, ${title}, ${caption}, ${imageUrl}, ${objectKey}, ${linkUrl}, ${displayOrder}, ${mediaType}, ${captionsUrl})`;
     else demo.site_media.unshift(item);
     res.status(201).json(item);
   } catch (error) { next(error); }
 });
 app.patch("/api/site-media/:id", async (req, res, next) => {
   try {
-    if ("title" in req.body || "slot" in req.body || "caption" in req.body || "linkUrl" in req.body) {
+    if ("title" in req.body || "slot" in req.body || "caption" in req.body || "linkUrl" in req.body || "captionsUrl" in req.body) {
       const slot = req.body.slot === "top_pick" ? "top_pick" : req.body.slot === "gallery" ? "gallery" : "";
       const title = text(req.body.title, 180);
       const caption = text(req.body.caption, 500);
+      const captionsUrl = String(req.body.captionsUrl || "");
       const linkUrl = text(req.body.linkUrl, 500);
       if (!slot || !title) return res.status(400).json({ error: "Choose a section and enter a title." });
       if (linkUrl) {
@@ -1341,19 +1348,20 @@ app.patch("/api/site-media/:id", async (req, res, next) => {
         const existing = await sql`SELECT COALESCE(media_type, 'image') AS "mediaType" FROM site_media WHERE id = ${req.params.id} LIMIT 1`;
         if (!existing[0]) return res.status(404).json({ error: "Website media item not found." });
         if (existing[0].mediaType === "video" && slot === "top_pick") return res.status(400).json({ error: "Videos can only be used in the Gallery." });
-        const rows = await sql`UPDATE site_media SET slot = ${slot}, title = ${title}, caption = ${caption}, link_url = ${linkUrl} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
+        if (captionsUrl && (existing[0].mediaType !== "video" || !captionsUrl.startsWith(`${mediaBaseUrl}/media/`) || !captionsUrl.toLowerCase().endsWith(".vtt"))) return res.status(400).json({ error: "Video captions must be a WebVTT file uploaded to RSVP media storage." });
+        const rows = await sql`UPDATE site_media SET slot = ${slot}, title = ${title}, caption = ${caption}, link_url = ${linkUrl}, captions_url = ${captionsUrl} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", captions_url AS "captionsUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
         if (!rows[0]) return res.status(404).json({ error: "Website media item not found." });
         return res.json(rows[0]);
       }
       const item = demo.site_media.find((row) => row.id === req.params.id);
       if (!item) return res.status(404).json({ error: "Website media item not found." });
       if (item.mediaType === "video" && slot === "top_pick") return res.status(400).json({ error: "Videos can only be used in the Gallery." });
-      Object.assign(item, { slot, title, caption, linkUrl });
+      Object.assign(item, { slot, title, caption, linkUrl, captionsUrl });
       return res.json(item);
     }
     const active = Boolean(req.body.active);
     if (sql) {
-      const rows = await sql`UPDATE site_media SET active = ${active} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
+      const rows = await sql`UPDATE site_media SET active = ${active} WHERE id = ${req.params.id} RETURNING id, slot, title, caption, image_url AS "imageUrl", COALESCE(media_type, 'image') AS "mediaType", COALESCE(captions_url, '') AS "captionsUrl", object_key AS "objectKey", link_url AS "linkUrl", display_order AS "displayOrder", active`;
       if (!rows[0]) return res.status(404).json({ error: "Website media item not found." });
       return res.json(rows[0]);
     }

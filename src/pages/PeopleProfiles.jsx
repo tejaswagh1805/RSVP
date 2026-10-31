@@ -42,9 +42,7 @@ export default function PeopleProfiles({ rows, act }) {
       let imageUrl = editing?.imageUrl || '';
       let objectKey = editing?.objectKey || '';
       if (file) {
-        const upload = await api.mediaUploadUrl(file);
-        const response = await fetch(upload.uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
-        if (!response.ok) throw new Error('Portrait upload to S3 failed.');
+        const upload = await api.uploadMedia(file);
         imageUrl = upload.publicUrl; objectKey = upload.key;
       }
       const payload = { ...form, name: form.name.trim(), role: form.role.trim(), subtitle: form.subtitle.trim(), bio: form.bio.trim(), imageUrl, objectKey };

@@ -42,9 +42,7 @@ export default function Venues({ rows = [], act }) {
       let imageUrl = editing?.imageUrl || '';
       let objectKey = editing?.objectKey || '';
       if (file) {
-        const upload = await api.mediaUploadUrl(file);
-        const response = await fetch(upload.uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
-        if (!response.ok) throw new Error('Venue image upload to S3 failed.');
+        const upload = await api.uploadMedia(file);
         imageUrl = upload.publicUrl; objectKey = upload.key;
       }
       const payload = { ...form, name: form.name.trim(), tagline: form.tagline.trim(), description: form.description.trim(), location: form.location.trim(), highlights: form.highlights.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), offer: form.offer.trim(), imageUrl, objectKey };

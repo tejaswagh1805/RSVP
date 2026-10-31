@@ -15,6 +15,44 @@ export async function request(path, options = {}) {
   return data;
 }
 
+async function prepareImageForUpload(file) {
+  if (!file.type.startsWith('image/')) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    if (file.size <= 300 * 1024 && Math.max(bitmap.width, bitmap.height) <= 1600) {
+      bitmap.close();
+      return file;
+    }
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    let optimized = null;
+    for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+      optimized = await new Promise((resolve, reject) => canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Image optimization failed.'));
+      }, 'image/webp', quality));
+      if (optimized.size <= 300 * 1024) break;
+    }
+    if (!optimized || (optimized.size >= file.size && Math.max(bitmap.width, bitmap.height) <= 1600)) return file;
+    const stem = file.name.replace(/\.[^.]+$/, '') || 'image';
+    return new File([optimized], `${stem}.webp`, { type: 'image/webp', lastModified: file.lastModified });
+  } catch {
+    return file;
+  }
+}
+
+async function uploadMedia(file, options = {}) {
+  const prepared = await prepareImageForUpload(file);
+  const target = await api.mediaUploadUrl(prepared, options);
+  const response = await fetch(target.uploadUrl, { method: 'PUT', headers: { 'Content-Type': prepared.type }, body: prepared });
+  if (!response.ok) throw new Error('Media upload to storage failed.');
+  return { ...target, file: prepared };
+}
+
 export const api = {
   me: () => request('/auth/me'),
   newsletter: () => request('/newsletter'),
@@ -31,6 +69,7 @@ export const api = {
   createEvent: (event) => request('/events', { method: 'POST', body: JSON.stringify(event) }),
   updateEventDetails: (id, event) => request(`/events/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(event) }),
   mediaUploadUrl: (file, options = {}) => request('/media/upload-url', { method: 'POST', body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size, purpose: options.siteGallery ? 'site-gallery' : 'event' }) }),
+  uploadMedia,
   createSiteMedia: (item) => request('/site-media', { method: 'POST', body: JSON.stringify(item) }),
   updateSiteMedia: (id, item) => request(`/site-media/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(item) }),
   deleteSiteMedia: (id) => request(`/site-media/${encodeURIComponent(id)}`, { method: 'DELETE' }),

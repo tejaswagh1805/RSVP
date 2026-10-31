@@ -118,9 +118,7 @@ export function EventModal({ close, act, event = null }) {
     set('imageFiles', [...form.imageFiles, ...files.map((file) => ({ file, preview: URL.createObjectURL(file) }))]);
   };
   const upload = async (file) => {
-    const { uploadUrl, publicUrl } = await api.mediaUploadUrl(file);
-    const response = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
-    if (!response.ok) throw new Error('Upload to media storage failed.');
+    const { publicUrl } = await api.uploadMedia(file);
     return publicUrl;
   };
   const submit = async (status) => {

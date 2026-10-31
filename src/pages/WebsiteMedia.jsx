@@ -10,10 +10,13 @@ export default function WebsiteMedia({ rows, act }) {
   const [caption, setCaption] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   const [file, setFile] = useState(null);
+  const [captionsFile, setCaptionsFile] = useState(null);
   const [preview, setPreview] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState('');
+  const [editingMediaType, setEditingMediaType] = useState('image');
+  const [editCaptionsFile, setEditCaptionsFile] = useState(null);
   const [editForm, setEditForm] = useState({ slot: 'gallery', title: '', caption: '', linkUrl: '' });
   const [rowError, setRowError] = useState('');
 
@@ -27,6 +30,7 @@ export default function WebsiteMedia({ rows, act }) {
       setFile(null); setPreview(''); setError(slot === 'gallery' ? 'Choose a JPG, PNG or WebP image up to 12 MB, or an MP4, WebM or MOV video up to 500 MB.' : 'Choose a JPG, PNG or WebP image up to 12 MB.'); return;
     }
     setMediaType(validVideo ? 'video' : 'image');
+    if (!validVideo) setCaptionsFile(null);
     setFile(next); setPreview(URL.createObjectURL(next));
   };
 
@@ -35,12 +39,15 @@ export default function WebsiteMedia({ rows, act }) {
     if (!file || !title.trim()) { setError('Choose a media file and enter a title.'); return; }
     setBusy(true); setError('');
     try {
-      const { uploadUrl, publicUrl, key } = await api.mediaUploadUrl(file, { siteGallery: slot === 'gallery' && mediaType === 'video' });
-      const response = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
-      if (!response.ok) throw new Error('Media upload to S3 failed.');
-      await api.createSiteMedia({ slot, title: title.trim(), caption: caption.trim(), linkUrl: linkUrl.trim(), imageUrl: publicUrl, mediaType, objectKey: key });
+      const { publicUrl, key } = await api.uploadMedia(file, { siteGallery: slot === 'gallery' && mediaType === 'video' });
+      let captionsUrl = '';
+      if (mediaType === 'video' && captionsFile) {
+        if (!(await captionsFile.text()).trimStart().startsWith('WEBVTT')) throw new Error('The captions file must start with WEBVTT.');
+        captionsUrl = (await api.uploadMedia(captionsFile, { siteGallery: true })).publicUrl;
+      }
+      await api.createSiteMedia({ slot, title: title.trim(), caption: caption.trim(), linkUrl: linkUrl.trim(), imageUrl: publicUrl, mediaType, captionsUrl, objectKey: key });
       await act(() => Promise.resolve(), `${slot === 'gallery' ? `Gallery ${mediaType}` : 'Top Pick'} published to the customer site`);
-      setTitle(''); setCaption(''); setLinkUrl(''); setFile(null);
+      setTitle(''); setCaption(''); setLinkUrl(''); setFile(null); setCaptionsFile(null);
       if (preview) URL.revokeObjectURL(preview);
       setPreview('');
     } catch (uploadError) { setError(uploadError.message || 'Could not save website media.'); }
@@ -50,16 +57,24 @@ export default function WebsiteMedia({ rows, act }) {
   const startEdit = (item) => {
     setRowError('');
     setEditingId(item.id);
-    setEditForm({ slot: item.slot, title: item.title || '', caption: item.caption || '', linkUrl: item.linkUrl || '' });
+    setEditingMediaType(item.mediaType || 'image');
+    setEditCaptionsFile(null);
+    setEditForm({ slot: item.slot, title: item.title || '', caption: item.caption || '', linkUrl: item.linkUrl || '', captionsUrl: item.captionsUrl || '' });
   };
 
   const saveEdit = async (event) => {
     event.preventDefault();
     setBusy(true); setRowError('');
     try {
-      await api.updateSiteMedia(editingId, { ...editForm, title: editForm.title.trim(), caption: editForm.caption.trim(), linkUrl: editForm.linkUrl.trim() });
+      let captionsUrl = editForm.captionsUrl || '';
+      if (editCaptionsFile) {
+        if (!(await editCaptionsFile.text()).trimStart().startsWith('WEBVTT')) throw new Error('The captions file must start with WEBVTT.');
+        captionsUrl = (await api.uploadMedia(editCaptionsFile, { siteGallery: true })).publicUrl;
+      }
+      await api.updateSiteMedia(editingId, { ...editForm, captionsUrl, title: editForm.title.trim(), caption: editForm.caption.trim(), linkUrl: editForm.linkUrl.trim() });
       await act(() => Promise.resolve(), 'Website media updated');
       setEditingId('');
+      setEditCaptionsFile(null);
     } catch (saveError) { setRowError(saveError.message || 'Could not update website media.'); }
     finally { setBusy(false); }
   };
@@ -86,6 +101,7 @@ export default function WebsiteMedia({ rows, act }) {
         <label className="field"><span>Caption</span><textarea rows="2" maxLength={500} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Optional supporting text" /></label>
         {slot === 'top_pick' ? <label className="field"><span>Link (optional)</span><input type="url" maxLength={500} value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://…" /></label> : null}
         <label className="field"><span>{slot === 'gallery' ? 'Image (JPG, PNG or WebP, up to 12 MB) or video (MP4, WebM or MOV, up to 500 MB)' : 'Image (JPG, PNG or WebP, up to 12 MB)'} *</span><input type="file" accept={slot === 'gallery' ? 'image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime' : 'image/jpeg,image/png,image/webp'} onChange={(e) => { chooseFile(e.target.files?.[0] || null); e.target.value = ''; }} /></label>
+        {mediaType === 'video' ? <label className="field"><span>Captions (optional, WebVTT .vtt up to 1 MB)</span><input type="file" accept=".vtt,text/vtt" onChange={(e) => { const selected = e.target.files?.[0] || null; setCaptionsFile(selected && selected.size <= 1024 * 1024 ? selected : null); if (selected && selected.size > 1024 * 1024) setError('Captions file must be 1 MB or smaller.'); e.target.value = ''; }} /></label> : null}
         {preview ? (mediaType === 'video' ? <video src={preview} controls muted playsInline style={{ maxWidth: 360, maxHeight: 220, borderRadius: 8 }} /> : <img src={preview} alt="Selected upload preview" style={{ maxWidth: 360, maxHeight: 220, objectFit: 'cover', borderRadius: 8 }} />) : null}
         {error ? <p className="event-image-error" role="alert">{error}</p> : null}
         <div><button className="button button-primary" disabled={busy || !file || !title.trim()}>{busy ? 'Uploading…' : <><ImagePlus size={16} /> Upload & publish</>}</button></div>
@@ -93,6 +109,6 @@ export default function WebsiteMedia({ rows, act }) {
     </section>
     <PageIntro title="Homepage media" detail="Hide an item to remove it from the customer site, edit its details, or delete its listing." />
     {rowError ? <p className="event-image-error" role="alert">{rowError}</p> : null}
-    <div className="panel table-panel table-scroll"><table><thead><tr><th>PREVIEW</th><th>SECTION</th><th>TITLE</th><th>CAPTION</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{rows.map((item) => <tr key={item.id}><td>{item.mediaType === 'video' ? <video src={item.imageUrl} muted playsInline style={{ width: 84, height: 54, objectFit: 'cover', borderRadius: 5 }} /> : <img src={item.imageUrl} alt="" style={{ width: 84, height: 54, objectFit: 'cover', borderRadius: 5 }} />}</td>{editingId === item.id ? <td colSpan="4"><form onSubmit={saveEdit} style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(140px, 1fr) auto', gap: 8, alignItems: 'end' }}><label className="field"><span>Section</span><select value={editForm.slot} onChange={(e) => setEditForm({ ...editForm, slot: e.target.value })}><option value="gallery">Gallery</option>{item.mediaType !== 'video' ? <option value="top_pick">RSVP Top Pick</option> : null}</select></label><label className="field"><span>Title *</span><input maxLength={180} required value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} /></label><label className="field"><span>Caption</span><input maxLength={500} value={editForm.caption} onChange={(e) => setEditForm({ ...editForm, caption: e.target.value })} /></label>{editForm.slot === 'top_pick' ? <label className="field"><span>Link</span><input type="url" maxLength={500} value={editForm.linkUrl} onChange={(e) => setEditForm({ ...editForm, linkUrl: e.target.value })} /></label> : <div /> }<div style={{ display: 'flex', gap: 5 }}><button className="small-action" disabled={busy || !editForm.title.trim()} aria-label="Save changes"><Save size={13} /> Save</button><button type="button" className="small-action" disabled={busy} onClick={() => setEditingId('')} aria-label="Cancel editing"><X size={13} /> Cancel</button></div></form></td> : <><td>{item.slot === 'gallery' ? 'Gallery' : 'RSVP Top Pick'}{item.mediaType === 'video' ? ' · Video' : ''}</td><td><strong>{item.title}</strong></td><td>{item.caption || '—'}</td><td><span className={`status-tag ${item.active ? 'status-published' : 'status-closed'}`}>{item.active ? 'Active' : 'Hidden'}</span></td><td><div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}><button className="small-action" disabled={busy} onClick={() => act(() => api.setSiteMediaActive(item.id, !item.active), item.active ? 'Media hidden from customer site' : 'Media shown on customer site')}>{item.active ? <><EyeOff size={13} /> Hide</> : <><Eye size={13} /> Show</>}</button><button className="small-action" disabled={busy} onClick={() => startEdit(item)}><Pencil size={13} /> Edit</button><button className="small-action" disabled={busy} onClick={() => deleteItem(item)}><Trash2 size={13} /> Delete</button></div></td></>}</tr>)}</tbody></table>{rows.length === 0 ? <EmptyState title="No homepage media yet" detail="Upload images or videos above to populate the Gallery." /> : null}</div>
+    <div className="panel table-panel table-scroll"><table><thead><tr><th>PREVIEW</th><th>SECTION</th><th>TITLE</th><th>CAPTION</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{rows.map((item) => <tr key={item.id}><td>{item.mediaType === 'video' ? <video src={item.imageUrl} muted playsInline style={{ width: 84, height: 54, objectFit: 'cover', borderRadius: 5 }} /> : <img src={item.imageUrl} alt="" style={{ width: 84, height: 54, objectFit: 'cover', borderRadius: 5 }} />}</td>{editingId === item.id ? <td colSpan="4"><form onSubmit={saveEdit} style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(140px, 1fr) auto', gap: 8, alignItems: 'end' }}><label className="field"><span>Section</span><select value={editForm.slot} onChange={(e) => setEditForm({ ...editForm, slot: e.target.value })}><option value="gallery">Gallery</option>{item.mediaType !== 'video' ? <option value="top_pick">RSVP Top Pick</option> : null}</select></label><label className="field"><span>Title *</span><input maxLength={180} required value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} /></label><label className="field"><span>Caption</span><input maxLength={500} value={editForm.caption} onChange={(e) => setEditForm({ ...editForm, caption: e.target.value })} /></label>{editForm.slot === 'top_pick' ? <label className="field"><span>Link</span><input type="url" maxLength={500} value={editForm.linkUrl} onChange={(e) => setEditForm({ ...editForm, linkUrl: e.target.value })} /></label> : <div /> }{editingMediaType === 'video' ? <label className='field'><span>Captions (WebVTT .vtt, up to 1 MB)</span><input type='file' accept='.vtt,text/vtt' onChange={(e) => { const selected = e.target.files?.[0] || null; setEditCaptionsFile(selected && selected.size <= 1024 * 1024 ? selected : null); if (selected && selected.size > 1024 * 1024) setRowError('Captions file must be 1 MB or smaller.'); e.target.value = ''; }} /></label> : null}<div style={{ display: 'flex', gap: 5 }}><button className="small-action" disabled={busy || !editForm.title.trim()} aria-label="Save changes"><Save size={13} /> Save</button><button type="button" className="small-action" disabled={busy} onClick={() => setEditingId('')} aria-label="Cancel editing"><X size={13} /> Cancel</button></div></form></td> : <><td>{item.slot === 'gallery' ? 'Gallery' : 'RSVP Top Pick'}{item.mediaType === 'video' ? ' · Video' : ''}</td><td><strong>{item.title}</strong></td><td>{item.caption || '—'}</td><td><span className={`status-tag ${item.active ? 'status-published' : 'status-closed'}`}>{item.active ? 'Active' : 'Hidden'}</span></td><td><div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}><button className="small-action" disabled={busy} onClick={() => act(() => api.setSiteMediaActive(item.id, !item.active), item.active ? 'Media hidden from customer site' : 'Media shown on customer site')}>{item.active ? <><EyeOff size={13} /> Hide</> : <><Eye size={13} /> Show</>}</button><button className="small-action" disabled={busy} onClick={() => startEdit(item)}><Pencil size={13} /> Edit</button><button className="small-action" disabled={busy} onClick={() => deleteItem(item)}><Trash2 size={13} /> Delete</button></div></td></>}</tr>)}</tbody></table>{rows.length === 0 ? <EmptyState title="No homepage media yet" detail="Upload images or videos above to populate the Gallery." /> : null}</div>
   </>;
 }
