@@ -3,7 +3,6 @@ const CREATOR_PASS_FORM_CONFIG = {
   // Use the client's existing Google Form; do not create a replacement.
   formId: "1VvAsWM2fEU_4NILdJvtKy0D4cPkzTRbG9ODfe7bTwcM",
   webhookUrl: "https://admin.rsvpdxb.com/api/integrations/google-forms/creator-pass",
-  webhookSecret: "REPLACE_WITH_THE_SAME_32_PLUS_CHARACTER_SECRET_AS_GOOGLE_FORM_WEBHOOK_SECRET",
   // Used only for responses submitted before the event dropdown is added.
   legacyEventId: "client-pataakha-2026",
 };
@@ -12,8 +11,10 @@ const CREATOR_PASS_EVENT_QUESTION = "Which event are you requesting a creator pa
 
 function connectExistingCreatorPassForm() {
   const config = CREATOR_PASS_FORM_CONFIG;
-  if (config.formId.startsWith("REPLACE_") || config.webhookUrl.includes("REPLACE_") || config.webhookSecret.includes("REPLACE_") || config.webhookSecret.length < 32) {
-    throw new Error("Fill in formId, webhookUrl, and webhookSecret before running this function.");
+  const properties = PropertiesService.getScriptProperties();
+  const webhookSecret = properties.getProperty("CREATOR_PASS_WEBHOOK_SECRET") || "";
+  if (config.formId.startsWith("REPLACE_") || config.webhookUrl.includes("REPLACE_") || webhookSecret.length < 32) {
+    throw new Error("Set CREATOR_PASS_WEBHOOK_SECRET in Apps Script Project Settings > Script Properties (32+ characters) before running this function.");
   }
 
   const form = FormApp.openById(config.formId);
@@ -21,7 +22,6 @@ function connectExistingCreatorPassForm() {
     CREATOR_PASS_FORM_ID: form.getId(),
     CREATOR_PASS_LEGACY_EVENT_ID: config.legacyEventId || "",
     CREATOR_PASS_WEBHOOK_URL: config.webhookUrl,
-    CREATOR_PASS_WEBHOOK_SECRET: config.webhookSecret,
   });
   syncCreatorPassEventChoices();
   // Avoid duplicate webhook delivery and refresh triggers if setup is repeated.
