@@ -65,6 +65,8 @@ function syncCreatorPassEventChoices() {
   const eventQuestion = item ? item.asListItem() : form.addListItem().setTitle(CREATOR_PASS_EVENT_QUESTION);
   eventQuestion.setRequired(true).setChoiceValues(labels);
   properties.setProperty("CREATOR_PASS_EVENT_CHOICES", JSON.stringify(labelsToIds));
+  // The customer site uses this entry ID to preselect the clicked event.
+  console.log(`Customer site VITE_CREATOR_PASS_EVENT_ENTRY_ID=${eventQuestion.getId()}`);
   console.log(`Updated event choices: ${labels.join(", ")}`);
 }
 
