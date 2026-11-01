@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS events (
   title TEXT NOT NULL,
   brand TEXT NOT NULL DEFAULT '',
   venue TEXT NOT NULL DEFAULT '',
-  date DATE NOT NULL,
+  date DATE,
   time TEXT NOT NULL DEFAULT '',
   area TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'Dining',

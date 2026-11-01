@@ -2209,7 +2209,7 @@ app.post("/api/events", async (req, res, next) => {
       const spots = Number(rawTrackCapacities[track] ?? capacity);
       return [track, Number.isInteger(spots) && spots > 0 ? Math.min(spots, capacity) : capacity];
     }));
-    if (tracks.some((track) => !Number.isInteger(Number(rawTrackCapacities[track] ?? capacity)) || Number(rawTrackCapacities[track] ?? capacity) < 1))
+    if (capacity > 0 && tracks.some((track) => !Number.isInteger(Number(rawTrackCapacities[track] ?? capacity)) || Number(rawTrackCapacities[track] ?? capacity) < 1))
       return res.status(400).json({ error: "Every invited track needs a positive RSVP capacity." });
     const influencerDeliverables = text(req.body.influencerDeliverables, 5000);
     const mapUrl = text(req.body.mapUrl, 1000);
@@ -2228,17 +2228,17 @@ app.post("/api/events", async (req, res, next) => {
       ? req.body.imageDataList.map((value) => String(value || ""))
       : req.body.imageData ? [String(req.body.imageData)] : [];
     const imageData = imageDataList[0] || "";
-    if (!title || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+    if (!title || (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)))
       return res
         .status(400)
-        .json({ error: "Event title and a valid date are required." });
+        .json({ error: "An event name is required; if supplied, the date must be valid." });
     if (applicationDeadline && !/^\d{4}-\d{2}-\d{2}$/.test(applicationDeadline))
       return res.status(400).json({ error: "Enter a valid application deadline." });
     if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
       return res.status(400).json({ error: "Enter a valid event end date." });
-    if (endDate && endDate < date)
+    if (endDate && date && endDate < date)
       return res.status(400).json({ error: "The event end date cannot be before its start date." });
-    if (applicationDeadline && applicationDeadline > date)
+    if (applicationDeadline && date && applicationDeadline > date)
       return res.status(400).json({ error: "The application deadline cannot be after the event date." });
     if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency))
       return res.status(400).json({ error: "Enter a valid ticket price and three-letter currency." });
@@ -2254,18 +2254,11 @@ app.post("/api/events", async (req, res, next) => {
         .status(400)
         .json({ error: "Choose up to 5 uploaded JPG, PNG or WebP images from the configured RSVP media bucket." });
     if (videoUrl && (!mediaBaseUrl || !videoUrl.startsWith(`${mediaBaseUrl}/media/`))) return res.status(400).json({ error: "The event video must be uploaded to configured media storage." });
-    if (!Number.isInteger(capacity) || capacity < (tracks.length ? 1 : 0) || capacity > 100000)
+    if (!Number.isInteger(capacity) || capacity < 0 || capacity > 100000)
       return res.status(400).json({ error: tracks.length ? "Enter a guest capacity above zero." : "Capacity cannot be negative." });
     if (status === "published") {
       const missing = [
-        !time && "start time",
-        !endTime && "end time",
-        !gatesOpenTime && "gates-open time",
-        capacity < 1 && "attendee capacity",
-        tracks.length === 0 && "at least one attendee track",
         !imageData && "cover image",
-        !venue && !mapUrl && "venue or map link",
-        tracks.includes("Creators") && !influencerDeliverables && "creator deliverables",
       ].filter(Boolean);
       if (missing.length) return res.status(400).json({ error: `Complete required listing fields before publishing: ${missing.join(", ")}.` });
     }
@@ -2309,7 +2302,7 @@ app.post("/api/events", async (req, res, next) => {
     };
     if (!sql) demo.events.unshift(event);
     else
-      await sql`INSERT INTO events (id, title, brand, venue, date, end_date, time, end_time, gates_open_time, area, capacity, confirmed, ticket_price, ticket_currency, ticket_url, reservation_phone, creator_pass_note, age_restriction, hashtag, application_deadline, action_label, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, track_capacities, influencer_deliverables, map_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date}, ${endDate || null}, ${time}, ${endTime}, ${gatesOpenTime}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${ticketUrl}, ${reservationPhone}, ${creatorPassNote}, ${ageRestriction}, ${hashtag}, ${applicationDeadline || null}, ${actionLabel}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${JSON.stringify(trackCapacities)}::jsonb, ${influencerDeliverables}, ${mapUrl}, ${status})`;
+      await sql`INSERT INTO events (id, title, brand, venue, date, end_date, time, end_time, gates_open_time, area, capacity, confirmed, ticket_price, ticket_currency, ticket_url, reservation_phone, creator_pass_note, age_restriction, hashtag, application_deadline, action_label, category, tracks, dress_code, about, included, who_is_invited, host_note, image_data, image_gallery, video_url, track_capacities, influencer_deliverables, map_url, status) VALUES (${id}, ${title}, ${brand}, ${venue}, ${date || null}, ${endDate || null}, ${time}, ${endTime}, ${gatesOpenTime}, ${area}, ${capacity}, 0, ${ticketPrice}, ${ticketCurrency}, ${ticketUrl}, ${reservationPhone}, ${creatorPassNote}, ${ageRestriction}, ${hashtag}, ${applicationDeadline || null}, ${actionLabel}, ${category}, ${tracks}, ${dressCode}, ${about}, ${included}, ${whoIsInvited}, ${hostNote}, ${imageData}, ${imageDataList}, ${videoUrl}, ${JSON.stringify(trackCapacities)}::jsonb, ${influencerDeliverables}, ${mapUrl}, ${status})`;
     res.status(201).json(event);
   } catch (error) {
     next(error);
@@ -2358,11 +2351,11 @@ app.patch("/api/events/:id", async (req, res, next) => {
       const imageDataList = Array.isArray(req.body.imageDataList) ? req.body.imageDataList.map((image) => String(image || "")) : [];
       const imageData = imageDataList[0] || "";
       const status = String(req.body.status || "draft");
-      if (!id || !title || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Event title and a valid date are required." });
-      if (endDate && (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < date)) return res.status(400).json({ error: "Enter an event end date on or after the event date." });
-      if (applicationDeadline && (!/^\d{4}-\d{2}-\d{2}$/.test(applicationDeadline) || applicationDeadline > date)) return res.status(400).json({ error: "Enter a valid application deadline on or before the event date." });
-      if (!Number.isInteger(capacity) || capacity < (tracks.length ? 1 : 0) || capacity > 100000) return res.status(400).json({ error: "Enter a valid RSVP capacity for the selected tracks." });
-      if (tracks.some((track) => !Number.isInteger(Number(rawTrackCapacities[track] ?? capacity)) || Number(rawTrackCapacities[track] ?? capacity) < 1)) return res.status(400).json({ error: "Every invited track needs a positive RSVP capacity." });
+      if (!id || !title || (date && !/^\d{4}-\d{2}-\d{2}$/.test(date))) return res.status(400).json({ error: "An event name is required; if supplied, the date must be valid." });
+      if (endDate && (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || (date && endDate < date))) return res.status(400).json({ error: "Enter a valid event end date on or after the event date." });
+      if (applicationDeadline && (!/^\d{4}-\d{2}-\d{2}$/.test(applicationDeadline) || (date && applicationDeadline > date))) return res.status(400).json({ error: "Enter a valid application deadline on or before the event date." });
+      if (!Number.isInteger(capacity) || capacity < 0 || capacity > 100000) return res.status(400).json({ error: "Enter a valid non-negative RSVP capacity." });
+      if (capacity > 0 && tracks.some((track) => !Number.isInteger(Number(rawTrackCapacities[track] ?? capacity)) || Number(rawTrackCapacities[track] ?? capacity) < 1)) return res.status(400).json({ error: "Every invited track needs a positive RSVP capacity." });
       if (!Number.isFinite(ticketPrice) || ticketPrice < 0 || !/^[A-Z]{3}$/.test(ticketCurrency)) return res.status(400).json({ error: "Enter a valid ticket price and currency." });
       if (ticketUrl && !/^https:\/\//i.test(ticketUrl)) return res.status(400).json({ error: "Use a secure HTTPS ticket link." });
       if (mapUrl && !/^https:\/\//i.test(mapUrl)) return res.status(400).json({ error: "Use a secure HTTPS map link." });
@@ -2375,7 +2368,7 @@ app.patch("/api/events/:id", async (req, res, next) => {
         Object.assign(event, { title, brand, venue, area, date, endDate, time, endTime, gatesOpenTime, ticketUrl, reservationPhone, creatorPassNote, ageRestriction, hashtag, applicationDeadline, actionLabel, capacity, ticketPrice, ticketCurrency, category, tracks, trackCapacities, influencerDeliverables, mapUrl, dressCode, about, included, whoIsInvited, hostNote, videoUrl, imageData, imageDataList, status });
         return res.json(event);
       }
-      const rows = await sql`UPDATE events SET title = ${title}, brand = ${brand}, venue = ${venue}, area = ${area}, date = ${date}, end_date = ${endDate || null}, time = ${time}, end_time = ${endTime}, gates_open_time = ${gatesOpenTime}, ticket_url = ${ticketUrl}, reservation_phone = ${reservationPhone}, creator_pass_note = ${creatorPassNote}, age_restriction = ${ageRestriction}, hashtag = ${hashtag}, application_deadline = ${applicationDeadline || null}, action_label = ${actionLabel}, capacity = ${capacity}, ticket_price = ${ticketPrice}, ticket_currency = ${ticketCurrency}, category = ${category}, tracks = ${tracks}, track_capacities = ${JSON.stringify(trackCapacities)}::jsonb, influencer_deliverables = ${influencerDeliverables}, map_url = ${mapUrl}, dress_code = ${dressCode}, about = ${about}, included = ${included}, who_is_invited = ${whoIsInvited}, host_note = ${hostNote}, video_url = ${videoUrl}, image_data = ${imageData}, image_gallery = ${imageDataList}, status = ${status}, updated_at = NOW() WHERE id = ${id} RETURNING *`;
+      const rows = await sql`UPDATE events SET title = ${title}, brand = ${brand}, venue = ${venue}, area = ${area}, date = ${date || null}, end_date = ${endDate || null}, time = ${time}, end_time = ${endTime}, gates_open_time = ${gatesOpenTime}, ticket_url = ${ticketUrl}, reservation_phone = ${reservationPhone}, creator_pass_note = ${creatorPassNote}, age_restriction = ${ageRestriction}, hashtag = ${hashtag}, application_deadline = ${applicationDeadline || null}, action_label = ${actionLabel}, capacity = ${capacity}, ticket_price = ${ticketPrice}, ticket_currency = ${ticketCurrency}, category = ${category}, tracks = ${tracks}, track_capacities = ${JSON.stringify(trackCapacities)}::jsonb, influencer_deliverables = ${influencerDeliverables}, map_url = ${mapUrl}, dress_code = ${dressCode}, about = ${about}, included = ${included}, who_is_invited = ${whoIsInvited}, host_note = ${hostNote}, video_url = ${videoUrl}, image_data = ${imageData}, image_gallery = ${imageDataList}, status = ${status}, updated_at = NOW() WHERE id = ${id} RETURNING *`;
       if (!rows[0]) return res.status(404).json({ error: "Event not found." });
       return res.json(rows[0]);
     }
@@ -2401,22 +2394,13 @@ app.patch("/api/events/:id", async (req, res, next) => {
       return res.status(400).json({ error: "Invalid event status." });
     if (status === "published") {
       const rows = sql
-        ? await sql`SELECT title, category, date, time, end_time, gates_open_time, capacity, tracks, venue, map_url, image_data, influencer_deliverables FROM events WHERE id = ${req.params.id} LIMIT 1`
+        ? await sql`SELECT title, image_data, image_gallery FROM events WHERE id = ${req.params.id} LIMIT 1`
         : [demo.events.find((row) => row.id === req.params.id)];
       const event = rows[0];
       if (!event) return res.status(404).json({ error: "Event not found." });
       const missing = [
         !event.title && "event name",
-        !event.category && "event tag",
-        !event.date && "date",
-        !event.time && "start time",
-        !event.end_time && !event.endTime && "end time",
-        !event.gates_open_time && !event.gatesOpenTime && "gates-open time",
-        !(Number(event.capacity) > 0) && "attendee capacity",
-        !(event.tracks || []).length && "at least one attendee track",
-        !event.image_data && !(event.imageDataList || event.imageGallery || []).length && "cover image",
-        !event.venue && !event.map_url && !event.mapUrl && "venue or map link",
-        (event.tracks || []).includes("Creators") && !(event.influencer_deliverables || event.influencerDeliverables) && "creator deliverables",
+        !event.image_data && !(event.image_gallery || event.imageDataList || event.imageGallery || []).length && "cover image",
       ].filter(Boolean);
       if (missing.length) return res.status(400).json({ error: `Complete required listing fields before publishing: ${missing.join(", ")}.` });
     }
