@@ -1018,13 +1018,36 @@ app.post("/api/integrations/google-forms/creator-pass", async (req, res, next) =
       return res.status(400).json({ error: "A name and valid international phone number are required." });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return res.status(400).json({ error: "Enter a valid email address." });
-    const events = await sql`SELECT id FROM events WHERE id = ${eventId} AND status = 'published' AND date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date AND creator_pass_note <> '' LIMIT 1`;
+    const events = await sql`SELECT id FROM events WHERE id = ${eventId} AND status = 'published' AND (date IS NULL OR date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date) AND creator_pass_note <> '' AND (application_deadline IS NULL OR application_deadline >= (NOW() AT TIME ZONE 'Asia/Dubai')::date) LIMIT 1`;
     if (!events[0]) return res.status(400).json({ error: "This event is not accepting creator pass requests." });
     const recent = await sql`SELECT id FROM event_ticket_inquiries WHERE event_id = ${eventId} AND phone = ${phone} AND request_type = 'creator_pass' AND status IN ('pending', 'accepted', 'waitlisted') LIMIT 1`;
     if (recent[0]) return res.json({ received: true, duplicate: true });
     const id = `google-form-${randomBytes(16).toString("hex")}`;
     await sql`INSERT INTO event_ticket_inquiries (id, event_id, full_name, email, phone, request_type) VALUES (${id}, ${eventId}, ${name}, ${email}, ${phone}, 'creator_pass')`;
     res.status(201).json({ received: true });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/integrations/google-forms/creator-pass/events", async (req, res, next) => {
+  try {
+    const configuredSecret = String(process.env.GOOGLE_FORM_WEBHOOK_SECRET || "");
+    const providedSecret = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    const expected = Buffer.from(configuredSecret);
+    const supplied = Buffer.from(providedSecret);
+    if (expected.length < 32 || expected.length !== supplied.length || !timingSafeEqual(expected, supplied))
+      return res.status(401).json({ error: "Invalid form integration credentials." });
+    if (!sql) return res.status(503).json({ error: "Creator pass intake requires the connected database." });
+
+    const events = await sql`
+      SELECT id, title, date::text AS date, venue
+      FROM events
+      WHERE status = 'published'
+        AND creator_pass_note <> ''
+        AND (date IS NULL OR date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+        AND (application_deadline IS NULL OR application_deadline >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+      ORDER BY date NULLS LAST, title
+    `;
+    res.json(events);
   } catch (error) { next(error); }
 });
 
