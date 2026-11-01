@@ -2,8 +2,8 @@
 const CREATOR_PASS_FORM_CONFIG = {
   // Use the client's existing Google Form; do not create a replacement.
   formId: "1VvAsWM2fEU_4NILdJvtKy0D4cPkzTRbG9ODfe7bTwcM",
-  eventId: "REPLACE_WITH_EVENT_ID",
-  webhookUrl: "https://REPLACE_WITH_ADMIN_HOST/api/integrations/google-forms/creator-pass",
+  eventId: "client-pataakha-2026",
+  webhookUrl: "https://admin.rsvpdxb.com/api/integrations/google-forms/creator-pass",
   webhookSecret: "REPLACE_WITH_THE_SAME_32_PLUS_CHARACTER_SECRET_AS_GOOGLE_FORM_WEBHOOK_SECRET",
 };
 
@@ -31,8 +31,25 @@ function connectExistingCreatorPassForm() {
 }
 
 function forwardCreatorPassRequest(event) {
+  sendCreatorPassResponse_(event.response);
+}
+
+// Run once after setup to import responses Google already recorded.
+function syncExistingCreatorPassResponses() {
+  const formId = PropertiesService.getScriptProperties().getProperty("CREATOR_PASS_FORM_ID");
+  if (!formId) throw new Error("Run connectExistingCreatorPassForm first.");
+  const responses = FormApp.openById(formId).getResponses();
+  let synced = 0;
+  responses.forEach((response) => {
+    sendCreatorPassResponse_(response);
+    synced += 1;
+  });
+  console.log(`Processed ${synced} recorded form responses. Existing pending requests are safely ignored as duplicates.`);
+}
+
+function sendCreatorPassResponse_(formResponse) {
   const properties = PropertiesService.getScriptProperties();
-  const answers = Object.fromEntries(event.response.getItemResponses().map((itemResponse) => [
+  const answers = Object.fromEntries(formResponse.getItemResponses().map((itemResponse) => [
     itemResponse.getItem().getTitle(),
     String(itemResponse.getResponse() || "").trim(),
   ]));
@@ -48,7 +65,7 @@ function forwardCreatorPassRequest(event) {
     payload: JSON.stringify({
       eventId: properties.getProperty("CREATOR_PASS_EVENT_ID"),
       name: findAnswer(["full name", "your name", "name"]),
-      email: findAnswer(["email"]),
+      email: findAnswer(["email"]) || String(formResponse.getRespondentEmail() || "").trim(),
       phone: findAnswer(["whatsapp", "phone", "mobile", "contact number"]),
     }),
     muteHttpExceptions: true,
