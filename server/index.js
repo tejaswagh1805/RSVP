@@ -1000,6 +1000,34 @@ app.post("/api/register", async (req, res, next) => {
     next(error);
   }
 });
+app.post("/api/integrations/google-forms/creator-pass", async (req, res, next) => {
+  try {
+    const configuredSecret = String(process.env.GOOGLE_FORM_WEBHOOK_SECRET || "");
+    const providedSecret = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    const expected = Buffer.from(configuredSecret);
+    const supplied = Buffer.from(providedSecret);
+    if (expected.length < 32 || expected.length !== supplied.length || !timingSafeEqual(expected, supplied))
+      return res.status(401).json({ error: "Invalid form integration credentials." });
+    if (!sql) return res.status(503).json({ error: "Creator pass intake requires the connected database." });
+
+    const eventId = text(req.body.eventId, 180);
+    const name = text(req.body.name, 120);
+    const email = text(req.body.email, 254).toLowerCase();
+    const phone = text(req.body.phone, 24).replace(/[^+\d]/g, "");
+    if (name.length < 2 || !/^\+?\d{8,15}$/.test(phone))
+      return res.status(400).json({ error: "A name and valid international phone number are required." });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return res.status(400).json({ error: "Enter a valid email address." });
+    const events = await sql`SELECT id FROM events WHERE id = ${eventId} AND status = 'published' AND date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date AND creator_pass_note <> '' LIMIT 1`;
+    if (!events[0]) return res.status(400).json({ error: "This event is not accepting creator pass requests." });
+    const recent = await sql`SELECT id FROM event_ticket_inquiries WHERE event_id = ${eventId} AND phone = ${phone} AND request_type = 'creator_pass' AND status IN ('pending', 'accepted', 'waitlisted') LIMIT 1`;
+    if (recent[0]) return res.json({ received: true, duplicate: true });
+    const id = `google-form-${randomBytes(16).toString("hex")}`;
+    await sql`INSERT INTO event_ticket_inquiries (id, event_id, full_name, email, phone, request_type) VALUES (${id}, ${eventId}, ${name}, ${email}, ${phone}, 'creator_pass')`;
+    res.status(201).json({ received: true });
+  } catch (error) { next(error); }
+});
+
 app.use("/api", async (req, res, next) => {
   if (req.path === "/health" || req.path.startsWith("/auth/") || req.path.startsWith("/mobile/")) return next();
   try {
@@ -1733,7 +1761,7 @@ app.get("/api/event-ticket-inquiries", async (req, res, next) => {
     if (!eventId) return res.status(400).json({ error: "Choose an event." });
     if (!sql) return res.json([]);
     const rows = await sql`
-      SELECT id, event_id AS "eventId", full_name AS name, email, phone, status,
+      SELECT id, event_id AS "eventId", full_name AS name, email, phone, request_type AS "requestType", status,
         created_at AS "createdAt"
       FROM event_ticket_inquiries
       WHERE event_id = ${eventId}
@@ -1747,13 +1775,13 @@ app.patch("/api/event-ticket-inquiries/:id", async (req, res, next) => {
   try {
     if (!(await currentAdmin(req))) return res.status(401).json({ error: "Sign in to update ticket inquiries." });
     const status = String(req.body.status || "");
-    if (!["pending", "contacted", "closed"].includes(status))
+    if (!["pending", "contacted", "closed", "accepted", "waitlisted", "declined"].includes(status))
       return res.status(400).json({ error: "Choose pending, contacted, or closed." });
     if (!sql) return res.status(404).json({ error: "Ticket inquiry not found." });
     const rows = await sql`
       UPDATE event_ticket_inquiries SET status = ${status}
       WHERE id = ${req.params.id}
-      RETURNING id, event_id AS "eventId", full_name AS name, email, phone, status, created_at AS "createdAt"
+      RETURNING id, event_id AS "eventId", full_name AS name, email, phone, request_type AS "requestType", status, created_at AS "createdAt"
     `;
     if (!rows[0]) return res.status(404).json({ error: "Ticket inquiry not found." });
     res.json(rows[0]);

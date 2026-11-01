@@ -8,9 +8,11 @@ if (!databaseUrl || /USER:PASSWORD|@HOST\/DBNAME/i.test(databaseUrl)) {
 }
 
 const sql = neon(databaseUrl);
-const migrationUrl = new URL('./migrations/001_event_ticket_inquiries.sql', import.meta.url);
-const migration = await readFile(migrationUrl, 'utf8');
-for (const statement of migration.split(';').map((part) => part.trim()).filter(Boolean)) {
-  await sql.query(statement);
+for (const file of ['001_event_ticket_inquiries.sql', '002_creator_pass_requests.sql']) {
+  const migrationUrl = new URL(`./migrations/${file}`, import.meta.url);
+  const migration = await readFile(migrationUrl, 'utf8');
+  for (const statement of migration.split(';').map((part) => part.trim()).filter(Boolean)) {
+    await sql.query(statement);
+  }
 }
-console.info('Event ticket inquiry table is ready.');
+console.info('Event ticket and creator pass request tables are ready.');

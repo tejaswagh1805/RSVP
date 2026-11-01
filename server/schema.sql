@@ -286,11 +286,14 @@ CREATE TABLE IF NOT EXISTS event_ticket_inquiries (
   full_name TEXT NOT NULL,
   email TEXT NOT NULL DEFAULT '',
   phone TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'contacted', 'closed')),
+  request_type TEXT NOT NULL DEFAULT 'ticket',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'contacted', 'closed', 'accepted', 'waitlisted', 'declined')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS event_ticket_inquiries_event_created_idx
   ON event_ticket_inquiries(event_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS event_ticket_inquiries_type_status_idx
+  ON event_ticket_inquiries(event_id, request_type, status, created_at DESC);
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS stripe_session_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS ticket_token TEXT UNIQUE;
 ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
