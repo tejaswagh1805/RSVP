@@ -119,7 +119,10 @@ export function EventModal({ close, act, event = null }) {
     setExistingImages(images);
     setForm({ title: event.title || '', brand: event.brand || '', venue: event.venue || '', area: event.area || '', date: event.date || '', endDate: event.endDate || '', time: event.time || '', endTime: event.endTime || '', gatesOpenTime: event.gatesOpenTime || '', capacity: event.capacity ?? 0, ticketPrice: event.ticketPrice ?? 0, ticketCurrency: event.ticketCurrency || 'AED', ticketUrl: event.ticketUrl || '', actionLabel: event.actionLabel || '', applicationDeadline: event.applicationDeadline || '', reservationPhone: event.reservationPhone || '', creatorPassNote: event.creatorPassNote || '', ageRestriction: event.ageRestriction || '', hashtag: event.hashtag || '', category: event.category || 'Other', tracks: event.tracks || [], trackCapacities: event.trackCapacities || {}, influencerDeliverables: event.influencerDeliverables || '', mapUrl: event.mapUrl || '', dressCode: event.dressCode || '', about: event.about || '', included: (event.included || []).join('\n'), whoIsInvited: event.whoIsInvited || '', hostNote: event.hostNote || '', imageFiles: [], videoFile: null });
   }, [event]);
-  const set = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const set = (key, value) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setImageError('');
+  };
   const onImages = async (fileList) => {
     setImageError('');
     const files = Array.from(fileList || []);
@@ -136,21 +139,14 @@ export function EventModal({ close, act, event = null }) {
     return publicUrl;
   };
   const submit = async (status) => {
-    if (!form.title.trim() || !form.date || imageError) return;
+    if (!form.title.trim() || !form.date) {
+      setImageError('Enter an event title and date before saving.');
+      return;
+    }
+    if (imageError && status !== 'draft') return;
     if (!event && status === 'published') {
-      const missing = [
-        !form.category && 'event tag',
-        !form.time && 'start time',
-        !form.endTime && 'end time',
-        !form.gatesOpenTime && 'gates-open time',
-        !Number.isInteger(Number(form.capacity)) || Number(form.capacity) < 1 ? 'attendee capacity' : '',
-        !form.tracks.length && 'at least one attendee track',
-        ![...existingImages, ...form.imageFiles].length && 'cover image',
-        !form.venue.trim() && !form.mapUrl.trim() && 'venue or map link',
-        form.tracks.includes('Creators') && !form.influencerDeliverables.trim() && 'creator deliverables',
-      ].filter(Boolean);
-      if (missing.length) {
-        setImageError(`Complete the required listing fields: ${missing.join(', ')}.`);
+      if (publishMissingFields.length) {
+        setImageError(`Complete the required listing fields: ${publishMissingFields.join(', ')}.`);
         return;
       }
     }
@@ -161,7 +157,11 @@ export function EventModal({ close, act, event = null }) {
       const videoUrl = form.videoFile ? await upload(form.videoFile) : '';
       const payload = { ...form, imageFiles: undefined, videoFile: undefined, imageData: imageDataList[0] || '', imageDataList, videoUrl: form.videoFile ? videoUrl : event?.videoUrl || '', included: form.included.split(/\n|,/).map((item) => item.trim()).filter(Boolean), status, confirmed: event?.confirmed || 0 };
       const save = () => event ? api.updateEventDetails(event.id, payload) : api.createEvent(payload);
-      await act(save, event ? 'Event updated' : status === 'published' ? 'Event created and published' : 'Event saved as draft');
+      const outcome = await act(save, event ? 'Event updated' : status === 'published' ? 'Event created and published' : 'Event saved as draft');
+      if (!outcome?.ok) {
+        setImageError(outcome?.error?.message || 'The event could not be saved. Your form is still open; try again.');
+        return;
+      }
       close();
     } catch (error) { setImageError(error.message || 'Media upload failed. Please try again.'); }
     finally { setBusy(false); }
@@ -171,6 +171,16 @@ export function EventModal({ close, act, event = null }) {
     set('tracks', tracks);
     set('trackCapacities', Object.fromEntries(tracks.map((track) => [track, form.trackCapacities[track] || form.capacity])));
   };
+  const publishMissingFields = [
+    !form.time && 'start time',
+    !form.endTime && 'end time',
+    !form.gatesOpenTime && 'gates-open time',
+    !Number.isInteger(Number(form.capacity)) || Number(form.capacity) < 1 ? 'attendee capacity above 0' : '',
+    !form.tracks.length && 'at least one attendee track',
+    ![...existingImages, ...form.imageFiles].length && 'cover image',
+    !form.venue.trim() && !form.mapUrl.trim() && 'venue or map link',
+    form.tracks.includes('Creators') && !form.influencerDeliverables.trim() && 'creator deliverables for the Creators track',
+  ].filter(Boolean);
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}><section className="modal-card event-create-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title"><div className="modal-header event-create-header"><div><div className="eyebrow">{event ? 'EVENT EDIT' : 'EVENT SETUP'}</div><h2 id="event-modal-title">{event ? 'Edit event' : 'Create an event'}</h2><p>Set the scene, share the details, and bring your guest list together.</p></div><button className="icon-button" onClick={close}><X size={18} /></button></div><div className="modal-body event-create-body"><div className="event-live-preview"><div className="event-preview-image">{(form.imageFiles[0]?.preview || existingImages[0]) ? <img src={form.imageFiles[0]?.preview || existingImages[0]} alt="Event cover preview" /> : <ImagePlus size={22} />}</div><div className="event-preview-copy"><span><Sparkles size={12} /> LIVE LISTING PREVIEW</span><strong>{form.title.trim() || 'Your event title'}</strong><small><CalendarDays size={13} /> {form.date ? dateLabel(form.date) : 'Choose an event date'} <i /> <MapPin size={13} /> {form.venue.trim() || 'Add a venue'}</small></div><span className="event-preview-category">{form.category}</span></div><nav className="event-form-jumpnav" aria-label="Jump to event form section"><button type="button" onClick={() => document.getElementById('event-basics-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>01 <span>Event details</span></button><button type="button" onClick={() => document.getElementById('event-media')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>02 <span>Media</span></button><button type="button" onClick={() => document.getElementById('event-copy')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>03 <span>Guest experience</span></button><button type="button" onClick={() => document.getElementById('event-audience')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>04 <span>Audience</span></button></nav>
     <label className="field"><span>Event title *</span><input autoFocus value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="e.g. Sunset Listening Session" /></label>
     <div className="form-grid" id="event-basics-grid"><label className="field"><span>Host / organiser (if supplied)</span><input value={form.brand} onChange={(e) => set('brand', e.target.value)} placeholder="Optional; do not guess" /></label><label className="field"><span>Listing type</span><select value={form.category} onChange={(e) => set('category', e.target.value)}>{['Dining', 'Fashion', 'Property', 'Music', 'Sports', 'Comedy', 'Awards', 'Campaign', 'Art', 'Nightlife', 'Wellness', 'Travel', 'Other'].map((name) => <option key={name}>{name}</option>)}</select></label><label className="field"><span>Event / awards date *</span><input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} /></label><label className="field"><span>Application / nomination deadline</span><input type="date" value={form.applicationDeadline} onChange={(e) => set('applicationDeadline', e.target.value)} /></label><label className="field"><span>Start time</span><input type="time" value={form.time} onChange={(e) => set('time', e.target.value)} /></label><label className="field"><span>Venue</span><input value={form.venue} onChange={(e) => set('venue', e.target.value)} placeholder="Optional venue" /></label><label className="field"><span>Area / city</span><input value={form.area} onChange={(e) => set('area', e.target.value)} placeholder="Area or city" /></label><label className="field"><span>Member RSVP capacity (0 when not applicable)</span><input type="number" min="0" value={form.capacity} onChange={(e) => { const capacity = Number(e.target.value); set('capacity', capacity); set('trackCapacities', Object.fromEntries(form.tracks.map((track) => [track, capacity]))); }} /></label><label className="field"><span>Ticket price (AED, for platform checkout)</span><input type="number" min="0" step="0.01" value={form.ticketPrice} onChange={(e) => set('ticketPrice', Number(e.target.value))} /></label><label className="field"><span>Ticket / application URL</span><input type="url" value={form.ticketUrl} onChange={(e) => set('ticketUrl', e.target.value)} placeholder="https://…" /></label><label className="field"><span>Link button label</span><input value={form.actionLabel} onChange={(e) => set('actionLabel', e.target.value)} placeholder="e.g. Buy tickets, Get nominated" /></label><label className="field"><span>Reservation phone</span><input type="tel" value={form.reservationPhone} onChange={(e) => set('reservationPhone', e.target.value)} placeholder="Optional" /></label><label className="field"><span>Age restriction</span><input value={form.ageRestriction} onChange={(e) => set('ageRestriction', e.target.value)} placeholder="e.g. 21+" /></label><label className="field"><span>Event hashtag</span><input value={form.hashtag} onChange={(e) => set('hashtag', e.target.value)} placeholder="#EventName" /></label></div>
@@ -185,7 +195,7 @@ export function EventModal({ close, act, event = null }) {
     <label className="field"><span>Creator pass / nomination note</span><textarea rows="2" value={form.creatorPassNote} onChange={(e) => set('creatorPassNote', e.target.value)} placeholder="Optional creator application details" /></label>
     <label className="field"><span>Host note</span><textarea rows="2" value={form.hostNote} onChange={(e) => set('hostNote', e.target.value)} placeholder="Arrival or event notes" /></label>
     <div className="field" id="event-audience"><span>Invited tracks and track capacity</span><div className="track-checks">{TRACKS.map((name) => <button key={name} className={form.tracks.includes(name) ? 'checked' : ''} onClick={() => toggle(name)} type="button">{form.tracks.includes(name) && <Check size={13} />}{name}</button>)}</div>{form.tracks.map((track) => <label key={track} className="field"><span>{track} RSVP spots</span><input type="number" min="1" max={form.capacity} value={form.trackCapacities[track] || form.capacity} onChange={(e) => set('trackCapacities', { ...form.trackCapacities, [track]: Number(e.target.value) })} /></label>)}<small className="muted-text">Accepted guests count against both their track limit and the total event capacity.</small></div>
-  </div><div className="modal-footer"><button className="button button-secondary" onClick={close}>Cancel</button><button className="button button-primary" disabled={busy || !form.title || !form.date || Boolean(imageError)} onClick={() => submit(event?.status || 'published')}>{busy ? 'Saving…' : event ? 'Save changes' : 'Publish event'} <ArrowUpRight size={15} /></button></div></section></div>;
+  </div><div className="modal-footer">{!event && publishMissingFields.length ? <small className="event-image-error" role="status">To publish, add: {publishMissingFields.join(', ')}.</small> : imageError ? <small className="event-image-error" role="alert">{imageError}</small> : null}<button className="button button-secondary" onClick={close}>Cancel</button>{!event ? <button className="button button-secondary" disabled={busy || !form.title || !form.date} onClick={() => submit('draft')}>{busy ? 'Saving…' : 'Save draft'}</button> : null}<button className="button button-primary" disabled={busy || !form.title || !form.date} onClick={() => submit(event?.status || 'published')}>{busy ? 'Saving…' : event ? 'Save changes' : 'Publish event'} <ArrowUpRight size={15} /></button></div></section></div>;
 }
 
 export function GuestModal({ event, guests, close }) {

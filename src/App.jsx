@@ -84,7 +84,17 @@ export default function App() {
   useEffect(() => { if (!toast) return undefined; const timer = setTimeout(() => setToast(''), 3000); return () => clearTimeout(timer); }, [toast]);
 
   const navigate = (to) => { location.hash = `/${to}`; setPage(to); setMobileNav(false); setSearch(''); };
-  const act = async (fn, success) => { try { const result = await fn(); await refresh(); setToast(typeof success === 'function' ? success(result) : success); } catch (err) { setToast(err.message); } };
+  const act = async (fn, success) => {
+    try {
+      const result = await fn();
+      await refresh();
+      setToast(typeof success === 'function' ? success(result) : success);
+      return { ok: true, result };
+    } catch (error) {
+      setToast(error.message || 'The action could not be completed.');
+      return { ok: false, error };
+    }
+  };
   const signIn = async (email, password) => {
     setAuthError('');
     try {

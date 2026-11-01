@@ -1,11 +1,18 @@
 const API = '/api';
 
 export async function request(path, options = {}) {
-  const response = await fetch(`${API}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    credentials: 'same-origin',
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(`${API}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      credentials: 'same-origin',
+      ...options,
+    });
+  } catch (cause) {
+    const error = new Error('Could not connect to the RSVP admin server. Check your connection and retry; your form is still open.');
+    error.cause = cause;
+    throw error;
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(data.error || 'The request could not be completed.');
