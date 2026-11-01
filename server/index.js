@@ -1710,6 +1710,8 @@ app.get("/api/event-rsvp-requests", async (req, res, next) => {
     const rows = await sql`
       SELECT r.id, r.event_id AS "eventId", e.title AS "eventTitle",
         r.member_id AS "memberId", m.name, r.member_email AS email, r.track,
+        COALESCE(m.handle, '') AS handle, COALESCE(m.followers, 0)::int AS followers,
+        COALESCE(m.mobile, '') AS phone, COALESCE(m.outlet, '') AS publication,
         r.guest_names AS "guestNames", r.deliverables_agreed AS "deliverablesAgreed",
         r.status, r.created_at AS "createdAt", r.reviewed_at AS "reviewedAt",
         r.reviewed_by AS "reviewedBy"
@@ -2226,6 +2228,19 @@ app.post("/api/events", async (req, res, next) => {
     if (videoUrl && (!mediaBaseUrl || !videoUrl.startsWith(`${mediaBaseUrl}/media/`))) return res.status(400).json({ error: "The event video must be uploaded to configured media storage." });
     if (!Number.isInteger(capacity) || capacity < (tracks.length ? 1 : 0) || capacity > 100000)
       return res.status(400).json({ error: tracks.length ? "Enter a guest capacity above zero." : "Capacity cannot be negative." });
+    if (status === "published") {
+      const missing = [
+        !time && "start time",
+        !endTime && "end time",
+        !gatesOpenTime && "gates-open time",
+        capacity < 1 && "attendee capacity",
+        tracks.length === 0 && "at least one attendee track",
+        !imageData && "cover image",
+        !venue && !mapUrl && "venue or map link",
+        tracks.includes("Creators") && !influencerDeliverables && "creator deliverables",
+      ].filter(Boolean);
+      if (missing.length) return res.status(400).json({ error: `Complete required listing fields before publishing: ${missing.join(", ")}.` });
+    }
     const id = `event-${crypto.randomUUID()}`;
     const event = {
       id,
@@ -2358,10 +2373,24 @@ app.patch("/api/events/:id", async (req, res, next) => {
       return res.status(400).json({ error: "Invalid event status." });
     if (status === "published") {
       const rows = sql
-        ? await sql`SELECT image_data FROM events WHERE id = ${req.params.id} LIMIT 1`
+        ? await sql`SELECT title, category, date, time, end_time, gates_open_time, capacity, tracks, venue, map_url, image_data, influencer_deliverables FROM events WHERE id = ${req.params.id} LIMIT 1`
         : [demo.events.find((row) => row.id === req.params.id)];
       const event = rows[0];
       if (!event) return res.status(404).json({ error: "Event not found." });
+      const missing = [
+        !event.title && "event name",
+        !event.category && "event tag",
+        !event.date && "date",
+        !event.time && "start time",
+        !event.end_time && !event.endTime && "end time",
+        !event.gates_open_time && !event.gatesOpenTime && "gates-open time",
+        !(Number(event.capacity) > 0) && "attendee capacity",
+        !(event.tracks || []).length && "at least one attendee track",
+        !event.image_data && !(event.imageDataList || event.imageGallery || []).length && "cover image",
+        !event.venue && !event.map_url && !event.mapUrl && "venue or map link",
+        (event.tracks || []).includes("Creators") && !(event.influencer_deliverables || event.influencerDeliverables) && "creator deliverables",
+      ].filter(Boolean);
+      if (missing.length) return res.status(400).json({ error: `Complete required listing fields before publishing: ${missing.join(", ")}.` });
     }
     if (!sql) {
       const item = demo.events.find((row) => row.id === req.params.id);
