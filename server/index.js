@@ -25,7 +25,7 @@ import { createTicketPdf } from "./ticket-pdf.js";
 import { S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { sendNewsletterCampaignEmail } from "./newsletter.js";
+import { sendMemberPasswordResetEmail, sendNewsletterCampaignEmail } from "./newsletter.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -1115,6 +1115,12 @@ async function verifyMemberPassword(password, storedHash) {
   return verifyPassword(password, stored);
 }
 
+async function hashMemberPassword(password) {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = await scrypt(password, salt, 64);
+  return `scrypt$${salt}$${hash.toString("hex")}`;
+}
+
 function mobileMemberResponse(member) {
   return { id: member.id, name: member.name, email: member.email, track: member.track, points: member.points, rank: member.rank, city: member.city, mobile: member.mobile, handle: member.handle, followers: member.followers, memberNumber: member.memberNumber };
 }
@@ -1151,6 +1157,51 @@ app.get("/api/mobile/people-profiles", async (_req, res, next) => {
       ORDER BY category, display_order, created_at DESC
     `;
     res.json(rows);
+  } catch (error) { next(error); }
+});
+
+app.get("/api/mobile/venues", async (_req, res, next) => {
+  try {
+    if (!sql) return res.status(503).json({ error: "Venue picks require the shared database." });
+    const rows = await sql`
+      SELECT id, slug, category, name, tagline, description, location, highlights, offer,
+        featured_date::text AS "featuredDate", image_url AS "imageUrl",
+        website_url AS "websiteUrl", more_info_url AS "moreInfoUrl",
+        display_order AS "displayOrder", featured, active
+      FROM venues
+      WHERE active = TRUE AND content_reviewed = TRUE
+      ORDER BY featured DESC, CASE category
+        WHEN 'Our partners' THEN 1 WHEN 'Desi luxe' THEN 2 WHEN 'Dinner to party' THEN 3
+        WHEN 'Bars & night culture' THEN 4 WHEN 'Coffee' THEN 5 ELSE 6 END,
+        display_order, name
+    `;
+    res.json(rows);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/password-reset", async (req, res, next) => {
+  try {
+    const email = text(req.body.email, 254).toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
+    if (!sql) return res.json({ ok: true });
+    const member = (await sql`SELECT id, name, email FROM members WHERE lower(email) = ${email} AND status = 'approved' LIMIT 1`)[0];
+    if (!member) return res.json({ ok: true });
+    const recent = await sql`SELECT 1 FROM member_password_resets WHERE member_id = ${member.id} AND created_at > NOW() - INTERVAL '1 minute' LIMIT 1`;
+    if (recent.length) return res.json({ ok: true });
+
+    const token = randomBytes(32).toString("hex");
+    const tokenHash = hashSessionToken(token);
+    await sql`DELETE FROM member_password_resets WHERE member_id = ${member.id}`;
+    await sql`INSERT INTO member_password_resets (token_hash, member_id, expires_at) VALUES (${tokenHash}, ${member.id}, NOW() + INTERVAL '30 minutes')`;
+    const siteUrl = String(process.env.PUBLIC_SITE_URL || "https://www.rsvpdxb.com").replace(/\/$/, "");
+    const resetUrl = `${siteUrl}/reset-password?token=${token}`;
+    try {
+      await sendMemberPasswordResetEmail({ email: member.email, name: member.name, resetUrl });
+    } catch (deliveryError) {
+      await sql`DELETE FROM member_password_resets WHERE token_hash = ${tokenHash}`;
+      console.error("Mobile member password reset email could not be sent", deliveryError);
+    }
+    res.json({ ok: true });
   } catch (error) { next(error); }
 });
 
@@ -1282,6 +1333,26 @@ app.post("/api/mobile/profile", async (req, res, next) => {
     `;
     if (!rows[0]) return res.status(404).json({ error: "Member profile was not found." });
     res.json(rows[0]);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/mobile/password", async (req, res, next) => {
+  try {
+    const member = await getMobileMember(req);
+    if (!member) return res.status(401).json({ error: "Sign in to update your password." });
+    const currentPassword = String(req.body.currentPassword || "");
+    const newPassword = String(req.body.newPassword || "");
+    if (!currentPassword || newPassword.length < 8 || !/[A-Z]/.test(newPassword) || !/\d/.test(newPassword) || !/[^A-Za-z0-9\s]/.test(newPassword)) {
+      return res.status(400).json({ error: "Use at least 8 characters, including an uppercase letter, a number, and a special character." });
+    }
+    const rows = await sql`SELECT password_hash AS "passwordHash" FROM members WHERE id = ${member.id} AND status = 'approved' LIMIT 1`;
+    if (!rows[0] || !(await verifyMemberPassword(currentPassword, rows[0].passwordHash))) {
+      return res.status(400).json({ error: "Your current password is incorrect." });
+    }
+    const passwordHash = await hashMemberPassword(newPassword);
+    await sql`UPDATE members SET password_hash = ${passwordHash} WHERE id = ${member.id} AND status = 'approved'`;
+    await sql`DELETE FROM member_sessions WHERE member_id = ${member.id}`;
+    res.json({ ok: true, signedOut: true });
   } catch (error) { next(error); }
 });
 

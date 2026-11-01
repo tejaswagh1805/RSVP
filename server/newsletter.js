@@ -47,3 +47,20 @@ export async function sendNewsletterCampaignEmail({
     },
   }));
 }
+
+export async function sendMemberPasswordResetEmail({ email, name, resetUrl }) {
+  const from = String(process.env.RSVP_PASSWORD_RESET_FROM || process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <noreply@rsvpdxb.com>";
+  const subject = "Reset your RSVP DXB password";
+  const safeName = escapeHtml(name || "there");
+  const safeUrl = escapeHtml(resetUrl);
+  const text = `Hello ${name || "there"},\n\nWe received a request to reset your RSVP DXB member password. Open this secure link within 30 minutes to choose a new password. It can be used once:\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.\n\nThe RSVP DXB team`;
+  const html = `<!doctype html><html lang="en"><body style="margin:0;padding:32px;background:#fffaf1;color:#2e1c10;font-family:Arial,Helvetica,sans-serif"><main style="max-width:600px;margin:auto;padding:32px;border:1px solid #dfc6a1;border-radius:16px"><p style="color:#85501f;font-weight:bold;letter-spacing:2px">RSVP DXB · MEMBER ACCOUNT SECURITY</p><h1 style="font-family:Georgia,serif;font-weight:normal">Reset your password</h1><p>Hello ${safeName},</p><p>We received a request to reset the password for your RSVP DXB member account. This secure link expires in 30 minutes and can be used once. If you did not request this, you can ignore this email.</p><p style="margin:28px 0"><a href="${safeUrl}" style="display:inline-block;padding:14px 22px;border-radius:8px;background:#85501f;color:white;text-decoration:none;font-weight:bold">Choose a new password</a></p><p style="color:#78634d;font-size:12px">For your security, never share this link. RSVP DXB will never ask you to send us your password.</p></main></body></html>`;
+  await ses.send(new SendEmailCommand({
+    Source: from,
+    Destination: { ToAddresses: [email] },
+    Message: {
+      Subject: { Charset: "UTF-8", Data: subject },
+      Body: { Text: { Charset: "UTF-8", Data: text }, Html: { Charset: "UTF-8", Data: html } },
+    },
+  }));
+}
