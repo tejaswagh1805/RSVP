@@ -1,16 +1,29 @@
-# Creator pass Google Form
+# Creator pass requests
 
-`CreatorPassForm.gs` connects the client's existing Google Form and forwards each submission into the RSVP DXB admin creator pass queue. It does not create or modify the form or its questions.
+Creator pass requests now use the RSVP DXB customer site directly. The request button opens the selected event page and its event-specific form; no Google Form URL or Apps Script sync is required for new requests.
 
-## One-time setup
+The form collects name, email, WhatsApp number, Instagram handle, Instagram follower count, and address. Requests are stored in `event_ticket_inquiries` with the selected `event_id` and `request_type = 'creator_pass'`. Admins review them from the event's RSVP review panel and can accept, waitlist, or decline.
 
-1. Create a random secret with at least 32 characters. Configure it either as the GitHub repository Actions secret `GOOGLE_FORM_WEBHOOK_SECRET` or in the AWS SSM parameter `/rsvp/prod/admin-env`. Also add it as a Script Property named `CREATOR_PASS_WEBHOOK_SECRET` in the Google Apps Script project. All configured values must match. Never commit the secret.
-2. Redeploy/restart the admin server after configuring the GitHub secret or AWS SSM value. The workflow uses the GitHub Actions secret first, then the SSM value; it warns if neither is set. A successful deployment without this secret does not enable form sync.
-3. Open the existing form (`formId` is already set below) with an account that can edit it. In the form editor, choose More (three dots) > Apps Script, then paste in `CreatorPassForm.gs`.
-4. In Apps Script Project Settings, add the Script Property `CREATOR_PASS_WEBHOOK_SECRET` with the same secret used by the admin deployment.
-5. Run `connectExistingCreatorPassForm` and authorize Google Forms and external-request permissions. This adds a required event dropdown populated from all published events accepting creator passes, installs the submit trigger, and refreshes the event list every six hours. Copy the numeric ID printed as `Customer site VITE_CREATOR_PASS_EVENT_ENTRY_ID=...` in the Apps Script execution log.
-6. Set that numeric ID as `VITE_CREATOR_PASS_EVENT_ENTRY_ID` in the customer site's deployment/build environment, then rebuild and deploy the customer site. Each event button will preselect the corresponding event in the shared Google Form. Google Forms keeps one fixed visible form title; it cannot change the title per event link.
-7. Run `syncExistingCreatorPassResponses` once to import responses Google already recorded. Responses submitted before the event dropdown existed use the PATAAKHA legacy event ID; new submissions use the event selected in the form. Pending duplicate phone numbers are ignored.
-8. The form asks for name and mobile number; the script maps those fields. Submissions missing a name or valid phone are rejected by the admin integration.
+The former Google Form integration script is retained for historical Google responses and legacy use. New website submissions do not pass through Google Forms.
 
-The account installing the trigger must have edit access to the client's form. If the connected account cannot access it, the form owner must install and authorize the script. A submitted form request enters the admin queue as **Pending**; submission itself does not accept a guest. Until these one-time Google and AWS configuration steps are completed, Google Forms responses will not appear in the admin queue.
+Deploy both the customer site and admin dashboard after applying migration `0026_creator_pass_applicant_details.sql` (the admin migration runner also includes this schema update). Then submit a creator pass request for each event and confirm it appears in that event's admin review panel.
+
+# New account applications and event enquiries
+
+`PublicIntakeForms.gs` creates two Google Forms in the Google account where the script is run:
+
+- **RSVP DXB — New Member Application**: collects a profile, track, and optional event interests. It does not ask for a password. A response creates a pending row in `applications`; selecting events also creates `event_interest` rows in `event_ticket_inquiries`.
+- **RSVP DXB — Event Interest & Enquiry**: collects contact details and selected published events. Each event is added to its event's RSVP review panel under **Google Form event enquiries**.
+
+The intake endpoint rejects duplicate submissions by Google response ID. Before creating an application, it checks both `members` and `applications`; an existing account or pending application is not created or changed. Existing members continue to sign in normally. Admin approval creates a new member and emails a one-time password setup link (valid for 30 minutes) to Google Form applicants.
+
+## Connect and publish the forms
+
+1. Deploy the admin code and run `npm run db:migrate` from `RSVP_admin_dashboard` against the shared database. This applies `005_google_form_event_interest.sql`.
+2. Create a standalone Apps Script project at [script.google.com](https://script.google.com), add the contents of `PublicIntakeForms.gs`, and save it.
+3. In **Project Settings → Script Properties**, add `GOOGLE_FORM_WEBHOOK_SECRET` with the same 32+ character value configured for the admin service in AWS SSM at `/rsvp/prod/admin-env`. Do not paste the secret in chat or commit it to source control.
+4. In the Apps Script function selector, choose `createRsvpDxbPublicIntakeForms` and click **Run**. Approve the Google Forms, external request, and email permissions. The execution log prints both edit links and public response links.
+5. Add the two public response URLs as repository **Actions variables** named `VITE_RSVP_NEW_MEMBER_FORM_URL` and `VITE_RSVP_EVENT_INTEREST_FORM_URL`, then deploy the customer site. The register page will direct new applicants to the account form; event pages will show **Ask about this event**.
+6. When new events are published, run `refreshRsvpDxbPublicIntakeEventChoices` in Apps Script so they appear in both forms.
+
+The deployed webhook secret must be present before the Apps Script trigger can sync. The Forms are created in the Google account that runs the script; this repository cannot create or publish them directly in a user's Google account.

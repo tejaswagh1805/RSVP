@@ -1,49 +1,63 @@
-// Paste this file into a new Google Apps Script project and fill in the config.
+// Connect one separately branded Google Form per event to the admin queue.
 const CREATOR_PASS_FORM_CONFIG = {
-  // Use the client's existing Google Form; do not create a replacement.
-  formId: "1VvAsWM2fEU_4NILdJvtKy0D4cPkzTRbG9ODfe7bTwcM",
   webhookUrl: "https://admin.rsvpdxb.com/api/integrations/google-forms/creator-pass",
-  // Used only for responses submitted before the event dropdown is added.
-  legacyEventId: "client-pataakha-2026",
+  // Add each event's Google Form ID here after creating/copying its form.
+  // Keep the existing PATAAKHA form assigned to PATAAKHA only.
+  eventForms: {
+    "client-pataakha-2026": "1VvAsWM2fEU_4NILdJvtKy0D4cPkzTRbG9ODfe7bTwcM",
+  },
 };
 
 const CREATOR_PASS_EVENT_QUESTION = "Which event are you requesting a creator pass for?";
 
-function connectExistingCreatorPassForm() {
+function connectCreatorPassForms() {
   const config = CREATOR_PASS_FORM_CONFIG;
   const properties = PropertiesService.getScriptProperties();
-  const webhookSecret = properties.getProperty("CREATOR_PASS_WEBHOOK_SECRET") || "";
-  if (config.formId.startsWith("REPLACE_") || config.webhookUrl.includes("REPLACE_") || webhookSecret.length < 32) {
-    throw new Error("Set CREATOR_PASS_WEBHOOK_SECRET in Apps Script Project Settings > Script Properties (32+ characters) before running this function.");
+  const secret = properties.getProperty("CREATOR_PASS_WEBHOOK_SECRET") || "";
+  const entries = Object.entries(config.eventForms || {}).filter(([, formId]) => formId && !String(formId).startsWith("REPLACE_"));
+  if (!config.webhookUrl || secret.length < 32 || !entries.length) {
+    throw new Error("Set CREATOR_PASS_WEBHOOK_SECRET (32+ characters) and add at least one event/form ID to eventForms.");
   }
 
-  const form = FormApp.openById(config.formId);
-  PropertiesService.getScriptProperties().setProperties({
-    CREATOR_PASS_FORM_ID: form.getId(),
-    CREATOR_PASS_LEGACY_EVENT_ID: config.legacyEventId || "",
-    CREATOR_PASS_WEBHOOK_URL: config.webhookUrl,
+  const events = fetchCreatorPassEvents_();
+  const eventById = Object.fromEntries(events.map((event) => [event.id, event]));
+  const formEventIds = {};
+  entries.forEach(([eventId, formId]) => {
+    const event = eventById[eventId];
+    if (!event) throw new Error(`Event ${eventId} is not currently published and accepting creator pass requests.`);
+    const form = FormApp.openById(formId);
+    const label = [event.title, event.date, event.venue].filter(Boolean).join(" · ");
+    const existing = form.getItems(FormApp.ItemType.LIST).find((item) => item.getTitle() === CREATOR_PASS_EVENT_QUESTION);
+    const question = existing ? existing.asListItem() : form.addListItem().setTitle(CREATOR_PASS_EVENT_QUESTION);
+    // A dedicated form only offers its own event, preventing cross-event submissions.
+    question.setRequired(true).setChoiceValues([label]);
+    formEventIds[form.getId()] = eventId;
+    console.log(`Connected ${event.title}: ${form.getPublishedUrl()}`);
   });
-  syncCreatorPassEventChoices();
-  // Avoid duplicate webhook delivery and refresh triggers if setup is repeated.
+
+  properties.setProperties({
+    CREATOR_PASS_WEBHOOK_URL: config.webhookUrl,
+    CREATOR_PASS_FORM_EVENT_IDS: JSON.stringify(formEventIds),
+  });
   ScriptApp.getProjectTriggers()
     .filter((trigger) => ["forwardCreatorPassRequest", "syncCreatorPassEventChoices"].includes(trigger.getHandlerFunction()))
     .forEach((trigger) => ScriptApp.deleteTrigger(trigger));
-  ScriptApp.newTrigger("forwardCreatorPassRequest").forForm(form).onFormSubmit().create();
-  ScriptApp.newTrigger("syncCreatorPassEventChoices").timeBased().everyHours(6).create();
-
-  console.log(`Connected guest form: ${form.getPublishedUrl()}`);
-  console.log(`Form editor: ${form.getEditUrl()}`);
+  entries.forEach(([, formId]) => {
+    ScriptApp.newTrigger("forwardCreatorPassRequest").forForm(FormApp.openById(formId)).onFormSubmit().create();
+  });
+  console.log(`Installed creator-pass submit triggers for ${entries.length} event form(s).`);
 }
 
-// Keep the Google Form event dropdown current for every published event accepting creator passes.
-function syncCreatorPassEventChoices() {
-  const properties = PropertiesService.getScriptProperties();
-  const formId = properties.getProperty("CREATOR_PASS_FORM_ID");
-  const webhookUrl = properties.getProperty("CREATOR_PASS_WEBHOOK_URL");
-  const secret = properties.getProperty("CREATOR_PASS_WEBHOOK_SECRET");
-  if (!formId || !webhookUrl || !secret) throw new Error("Run connectExistingCreatorPassForm first.");
+// Kept as a migration alias for the old setup instructions.
+function connectExistingCreatorPassForm() {
+  connectCreatorPassForms();
+}
 
-  const response = UrlFetchApp.fetch(`${webhookUrl}/events`, {
+function fetchCreatorPassEvents_() {
+  const properties = PropertiesService.getScriptProperties();
+  const url = CREATOR_PASS_FORM_CONFIG.webhookUrl;
+  const secret = properties.getProperty("CREATOR_PASS_WEBHOOK_SECRET") || "";
+  const response = UrlFetchApp.fetch(`${url}/events`, {
     method: "get",
     headers: { Authorization: `Bearer ${secret}` },
     muteHttpExceptions: true,
@@ -52,56 +66,43 @@ function syncCreatorPassEventChoices() {
     throw new Error(`Could not load creator-pass events (${response.getResponseCode()}): ${response.getContentText()}`);
   }
   const events = JSON.parse(response.getContentText());
-  if (!Array.isArray(events) || !events.length) throw new Error("No published events are currently accepting creator-pass requests.");
-
-  const labelsToIds = {};
-  const labels = events.map((event) => {
-    const label = [event.title, event.date, event.venue].filter(Boolean).join(" · ");
-    labelsToIds[label] = event.id;
-    return label;
-  });
-  const form = FormApp.openById(formId);
-  const item = form.getItems(FormApp.ItemType.LIST).find((candidate) => candidate.getTitle() === CREATOR_PASS_EVENT_QUESTION);
-  const eventQuestion = item ? item.asListItem() : form.addListItem().setTitle(CREATOR_PASS_EVENT_QUESTION);
-  eventQuestion.setRequired(true).setChoiceValues(labels);
-  properties.setProperty("CREATOR_PASS_EVENT_CHOICES", JSON.stringify(labelsToIds));
-  // The customer site uses this entry ID to preselect the clicked event.
-  console.log(`Customer site VITE_CREATOR_PASS_EVENT_ENTRY_ID=${eventQuestion.getId()}`);
-  console.log(`Updated event choices: ${labels.join(", ")}`);
+  if (!Array.isArray(events)) throw new Error("The creator-pass events response was invalid.");
+  return events;
 }
 
 function forwardCreatorPassRequest(event) {
-  sendCreatorPassResponse_(event.response);
+  const formId = event.source && event.source.getId ? event.source.getId() : "";
+  const formEventIds = JSON.parse(PropertiesService.getScriptProperties().getProperty("CREATOR_PASS_FORM_EVENT_IDS") || "{}");
+  const eventId = formEventIds[formId];
+  if (!eventId) throw new Error(`No event is configured for submitted form ${formId}. Update eventForms and run connectCreatorPassForms.`);
+  sendCreatorPassResponse_(event.response, eventId);
 }
 
-// Run once after setup to import responses Google already recorded.
+// Import all existing responses from every configured event form.
 function syncExistingCreatorPassResponses() {
-  const formId = PropertiesService.getScriptProperties().getProperty("CREATOR_PASS_FORM_ID");
-  if (!formId) throw new Error("Run connectExistingCreatorPassForm first.");
-  const responses = FormApp.openById(formId).getResponses();
+  const formEventIds = JSON.parse(PropertiesService.getScriptProperties().getProperty("CREATOR_PASS_FORM_EVENT_IDS") || "{}");
+  const formIds = Object.keys(formEventIds);
+  if (!formIds.length) throw new Error("Run connectCreatorPassForms first.");
   let synced = 0;
-  responses.forEach((response) => {
-    sendCreatorPassResponse_(response);
-    synced += 1;
+  formIds.forEach((formId) => {
+    FormApp.openById(formId).getResponses().forEach((response) => {
+      sendCreatorPassResponse_(response, formEventIds[formId]);
+      synced += 1;
+    });
   });
-  console.log(`Processed ${synced} recorded form responses. Existing pending requests are safely ignored as duplicates.`);
+  console.log(`Processed ${synced} recorded responses across ${formIds.length} form(s). Existing pending duplicates are safely ignored.`);
 }
 
-function sendCreatorPassResponse_(formResponse) {
+function sendCreatorPassResponse_(formResponse, eventId) {
   const properties = PropertiesService.getScriptProperties();
   const answers = Object.fromEntries(formResponse.getItemResponses().map((itemResponse) => [
     itemResponse.getItem().getTitle(),
     String(itemResponse.getResponse() || "").trim(),
   ]));
-  // Support common client-form labels without changing the form itself.
   const findAnswer = (labels) => {
     const key = Object.keys(answers).find((title) => labels.some((label) => title.toLowerCase().includes(label)));
     return key ? answers[key] : "";
   };
-  const selectedEvent = findAnswer(["which event", "event"]);
-  const eventChoices = JSON.parse(properties.getProperty("CREATOR_PASS_EVENT_CHOICES") || "{}");
-  const eventId = eventChoices[selectedEvent] || (!selectedEvent ? properties.getProperty("CREATOR_PASS_LEGACY_EVENT_ID") : "");
-  if (!eventId) throw new Error(`Could not match the selected event "${selectedEvent}". Refresh the form's event choices and retry.`);
   const response = UrlFetchApp.fetch(properties.getProperty("CREATOR_PASS_WEBHOOK_URL"), {
     method: "post",
     contentType: "application/json",

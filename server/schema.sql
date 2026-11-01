@@ -290,6 +290,10 @@ CREATE TABLE IF NOT EXISTS event_ticket_inquiries (
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'contacted', 'closed', 'accepted', 'waitlisted', 'declined')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE event_ticket_inquiries ADD COLUMN IF NOT EXISTS instagram_handle TEXT NOT NULL DEFAULT '';
+ALTER TABLE event_ticket_inquiries ADD COLUMN IF NOT EXISTS instagram_followers TEXT NOT NULL DEFAULT '';
+ALTER TABLE event_ticket_inquiries ADD COLUMN IF NOT EXISTS creator_address TEXT NOT NULL DEFAULT '';
+ALTER TABLE event_ticket_inquiries ADD COLUMN IF NOT EXISTS request_notes TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS event_ticket_inquiries_event_created_idx
   ON event_ticket_inquiries(event_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS event_ticket_inquiries_type_status_idx

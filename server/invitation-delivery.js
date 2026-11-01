@@ -149,6 +149,28 @@ export async function sendMembershipApprovalEmail({ name, email }) {
   }
 }
 
+export async function sendMemberActivationEmail({ name, email, activationUrl }) {
+  if (!email) return { status: "skipped", message: "No email address is available for account setup." };
+  const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <vinitahirani@rsvpdxb.com>";
+  if (!region) return { status: "not_configured", message: "Member approved, but account setup email is not configured." };
+  const safeName = htmlEscape(name || "there");
+  const safeUrl = htmlEscape(activationUrl);
+  const subject = "Your RSVP DXB application is approved — set up your account";
+  const text = `Hi ${name || "there"},\n\nYour RSVP DXB application is approved. Create your password using this one-time link, which expires in 30 minutes:\n\n${activationUrl}\n\nAfter setting your password, sign in with this email address.\n\nTeam RSVP DXB`;
+  const html = `<!doctype html><html><body style="margin:0;background:#f3e3cb;color:#2e1c10;font-family:Arial,sans-serif"><main style="max-width:560px;margin:32px auto;padding:36px 28px;background:#fbf3e7;border:1px solid #d2b995;border-radius:12px"><p style="color:#86501f;font-size:12px;letter-spacing:2px;text-transform:uppercase">RSVP DXB</p><h1 style="font-size:28px;font-weight:500">Your application is approved</h1><p>Hello ${safeName},</p><p>Your RSVP DXB application is approved. Set a password to activate your new account. This one-time link expires in 30 minutes.</p><p style="margin:28px 0"><a href="${safeUrl}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#86501f;color:#fff6e9;text-decoration:none">Set your password</a></p><p>After setup, sign in with this email address.</p><p style="font-size:12px;color:#705238">Team RSVP DXB</p></main></body></html>`;
+  try {
+    const ses = new SESClient({ region });
+    await ses.send(new SendEmailCommand({ Source: from, Destination: { ToAddresses: [email] }, Message: {
+      Subject: { Charset: "UTF-8", Data: subject },
+      Body: { Text: { Charset: "UTF-8", Data: text }, Html: { Charset: "UTF-8", Data: html } },
+    } }));
+    return { status: "submitted", message: "Account setup email accepted by Amazon SES; inbox delivery is not confirmed." };
+  } catch (error) {
+    return { status: "failed", message: `Member approved, but account setup email failed: ${String(error?.message || "Check SES configuration.").slice(0, 180)}` };
+  }
+}
+
 export async function sendRsvpDecisionEmail({ name, email, event, track, guestNames = [], deliverables = "", status }) {
   if (!email) return { status: "skipped", message: "No email address is on this RSVP." };
   const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
@@ -187,6 +209,42 @@ export async function sendRsvpDecisionEmail({ name, email, event, track, guestNa
       Message: { Subject: { Charset: "UTF-8", Data: subject }, Body: { Text: { Charset: "UTF-8", Data: `Hello ${name},\n\n${message}\n\nWarm regards,\nThe RSVP DXB team` }, Html: { Charset: "UTF-8", Data: html } } },
     }));
     return { status: "submitted", message: "Accepted by Amazon SES; inbox delivery is not confirmed." };
+  } catch (error) {
+    return { status: "failed", message: String(error?.message || "Could not send through Amazon SES.").slice(0, 240) };
+  }
+}
+
+export async function sendCreatorPassDecisionEmail({ name, email, event, status, entryCode = "" }) {
+  if (!email) return { status: "skipped", message: "No email address was provided; contact the guest by phone or WhatsApp manually." };
+  if (!["accepted", "waitlisted", "declined"].includes(status))
+    return { status: "skipped", message: "This status does not send a creator-pass decision email." };
+  const region = String(process.env.SES_REGION || process.env.AWS_REGION || "").trim();
+  const from = String(process.env.SES_FROM_EMAIL || "").trim() || "RSVP DXB <vinitahirani@rsvpdxb.com>";
+  if (!region || !from) return { status: "not_configured", message: "Decision saved, but email is not configured (SES_REGION / AWS_REGION)." };
+
+  const details = invitationEventDetails(event);
+  const accepted = status === "accepted";
+  const waitlisted = status === "waitlisted";
+  const subject = accepted ? `Your creator pass is confirmed · ${event.title} | RSVP DXB`
+    : waitlisted ? `Your creator pass request is waitlisted · ${event.title} | RSVP DXB`
+      : `An update about your creator pass · ${event.title} | RSVP DXB`;
+  const message = accepted
+    ? `Your creator pass for ${event.title} is confirmed.\n\n${details}\n\nYour door entry code: ${entryCode}\nPlease show this code to the door team. This is a complimentary creator pass, not a paid ticket.`
+    : waitlisted
+      ? `Thank you for requesting a creator pass for ${event.title}. Your request is on the waitlist; the team will contact you if a place opens.`
+      : `Thank you for your interest in ${event.title}. Unfortunately, we are unable to offer you a creator pass for this event.`;
+  const safeName = htmlEscape(name || "there");
+  const safeTitle = htmlEscape(event.title);
+  const safeMessage = htmlEscape(message).replaceAll("\n", "<br />");
+  const html = `<!doctype html><html><body style="margin:0;background:#f3e3cb;color:#2e1c10;font-family:Arial,sans-serif"><main style="max-width:560px;margin:32px auto;padding:36px 28px;background:#fbf3e7;border:1px solid #d2b995;border-radius:12px"><p style="color:#86501f;font-size:12px;letter-spacing:2px;text-transform:uppercase">RSVP DXB · CREATOR PASS</p><h1 style="font-size:26px;font-weight:500">${accepted ? "Your pass is confirmed" : waitlisted ? "You're on the waitlist" : "An update about your request"}</h1><p>Hello ${safeName},</p><p style="line-height:1.7">${safeMessage}</p><p style="font-size:12px;color:#705238">Warm regards,<br />The RSVP DXB team</p></main></body></html>`;
+  try {
+    const ses = new SESClient({ region });
+    await ses.send(new SendEmailCommand({
+      Source: from,
+      Destination: { ToAddresses: [email] },
+      Message: { Subject: { Charset: "UTF-8", Data: subject }, Body: { Text: { Charset: "UTF-8", Data: `Hello ${name || "there"},\n\n${message}\n\nWarm regards,\nThe RSVP DXB team` }, Html: { Charset: "UTF-8", Data: html } } },
+    }));
+    return { status: "submitted", message: "Decision email accepted by Amazon SES; inbox delivery is not confirmed." };
   } catch (error) {
     return { status: "failed", message: String(error?.message || "Could not send through Amazon SES.").slice(0, 240) };
   }

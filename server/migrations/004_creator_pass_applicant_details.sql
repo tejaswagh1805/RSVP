@@ -1,0 +1,4 @@
+ALTER TABLE event_ticket_inquiries
+  ADD COLUMN IF NOT EXISTS instagram_handle TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS instagram_followers TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS creator_address TEXT NOT NULL DEFAULT '';

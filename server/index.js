@@ -10,7 +10,9 @@ import {
   sendInvitationEmail,
   sendInvitationWhatsApp,
   sendMembershipApprovalEmail,
+  sendMemberActivationEmail,
   sendRsvpDecisionEmail,
+  sendCreatorPassDecisionEmail,
 } from "./invitation-delivery.js";
 import {
   clearSessionCookie,
@@ -1051,6 +1053,132 @@ app.get("/api/integrations/google-forms/creator-pass/events", async (req, res, n
   } catch (error) { next(error); }
 });
 
+app.get("/api/integrations/google-forms/public-intake/events", async (req, res, next) => {
+  try {
+    const configuredSecret = String(process.env.GOOGLE_FORM_WEBHOOK_SECRET || "");
+    const providedSecret = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    const expected = Buffer.from(configuredSecret);
+    const supplied = Buffer.from(providedSecret);
+    if (expected.length < 32 || expected.length !== supplied.length || !timingSafeEqual(expected, supplied))
+      return res.status(401).json({ error: "Invalid form integration credentials." });
+    if (!sql) return res.status(503).json({ error: "Event selection requires the connected database." });
+    const events = await sql`
+      SELECT id, title, date::text AS date, venue
+      FROM events
+      WHERE status = 'published'
+        AND (date IS NULL OR date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+        AND (application_deadline IS NULL OR application_deadline >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+      ORDER BY date NULLS LAST, title
+    `;
+    res.json(events);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/integrations/google-forms/public-intake", async (req, res, next) => {
+  try {
+    const configuredSecret = String(process.env.GOOGLE_FORM_WEBHOOK_SECRET || "");
+    const providedSecret = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    const expected = Buffer.from(configuredSecret);
+    const supplied = Buffer.from(providedSecret);
+    if (expected.length < 32 || expected.length !== supplied.length || !timingSafeEqual(expected, supplied))
+      return res.status(401).json({ error: "Invalid form integration credentials." });
+    if (!sql) return res.status(503).json({ error: "Form submissions require the connected database." });
+
+    const kind = String(req.body.kind || "");
+    const name = text(req.body.name, 120);
+    const email = text(req.body.email, 254).toLowerCase();
+    const phone = text(req.body.phone, 30).replace(/[^+\d]/g, "");
+    const formId = text(req.body.formId, 180);
+    const responseId = text(req.body.responseId, 180);
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !formId || !responseId)
+      return res.status(400).json({ error: "A name, valid email, and Google response ID are required." });
+
+    const selectedEvents = Array.isArray(req.body.eventIds)
+      ? [...new Set(req.body.eventIds.map((id) => text(id, 180)).filter(Boolean))].slice(0, 20)
+      : [text(req.body.eventId, 180)].filter(Boolean);
+    const notes = text(req.body.notes, 3000);
+    const responseHash = createHash("sha256").update(`${formId}:${responseId}`).digest("hex");
+
+    if (kind === "new_account") {
+      const track = normalizeTrack(req.body.track);
+      if (!track || !["Media", "Creators", "Tastemakers", "Private Circle"].includes(track))
+        return res.status(400).json({ error: "Choose a valid member track." });
+      const existing = await sql`
+        SELECT email FROM members WHERE lower(email) = ${email}
+        UNION ALL SELECT email FROM applications WHERE lower(email) = ${email}
+        LIMIT 1
+      `;
+      if (existing[0]) return res.json({ received: true, duplicate: true, message: "This email already has an account or application. Existing members should sign in." });
+
+      const profile = text(req.body.instagramProfile, 300);
+      const profileMatch = profile.match(/^(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9._]{1,30})\/?$/i);
+      const handleMatch = profile.match(/^@?([a-zA-Z0-9._]{1,30})$/);
+      const instagramHandle = profileMatch?.[1] || handleMatch?.[1] || "";
+      const handle = instagramHandle && !instagramHandle.startsWith(".") && !instagramHandle.endsWith(".") ? `@${instagramHandle}` : "";
+      if (!handle) return res.status(400).json({ error: "Enter a valid Instagram profile or username." });
+      const followers = text(req.body.instagramFollowers, 20).replace(/\D/g, "").slice(0, 10);
+      if (!followers) return res.status(400).json({ error: "Enter your Instagram follower count." });
+      const city = text(req.body.city, 100) || "Dubai";
+      const outlet = text(req.body.outlet, 180);
+      const role = text(req.body.role, 180);
+      const detail = [notes, selectedEvents.length ? `Events of interest: ${selectedEvents.join(", ")}` : ""]
+        .filter(Boolean).join("\n").slice(0, 1000);
+      const applicationId = `gform-${responseHash.slice(0, 48)}`;
+      const inserted = await sql`
+        INSERT INTO applications (id, name, email, track, city, detail, followers, profile_url, handle,
+          platform, mobile, outlet, application_role, all_profiles, source_track, password_hash, submitted, status)
+        VALUES (${applicationId}, ${name}, ${email}, ${track}, ${city}, ${detail}, ${followers},
+          ${handle ? `https://www.instagram.com/${handle.slice(1)}/` : ""}, ${handle}, 'Instagram', ${phone},
+          ${outlet}, ${role}, '', ${track}, NULL, CURRENT_DATE, 'pending')
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id
+      `;
+      if (!inserted[0]) return res.json({ received: true, duplicate: true });
+
+      if (selectedEvents.length) {
+        const selectedEventIds = new Set(selectedEvents);
+        const publishedEvents = await sql`
+          SELECT id, title FROM events
+          WHERE status = 'published'
+            AND (date IS NULL OR date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+            AND (application_deadline IS NULL OR application_deadline >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+        `;
+        const matchingEvents = publishedEvents.filter((event) => selectedEventIds.has(event.id));
+        for (const event of matchingEvents) {
+          await sql`
+            INSERT INTO event_ticket_inquiries (id, event_id, full_name, email, phone, request_type, request_notes)
+            VALUES (${`gform-interest-${createHash("sha256").update(`${responseHash}:${event.id}`).digest("hex").slice(0, 40)}`},
+              ${event.id}, ${name}, ${email}, ${phone}, 'event_interest', ${`New member application. ${notes}`.trim()})
+            ON CONFLICT (id) DO NOTHING
+          `;
+        }
+      }
+      return res.status(201).json({ received: true, applicationId });
+    }
+
+    if (kind !== "event_interest") return res.status(400).json({ error: "Unknown Google Form type." });
+    if (!selectedEvents.length) return res.status(400).json({ error: "Choose an event." });
+    const selectedEventIds = new Set(selectedEvents);
+    const publishedEvents = await sql`
+      SELECT id FROM events
+      WHERE status = 'published'
+        AND (date IS NULL OR date >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+        AND (application_deadline IS NULL OR application_deadline >= (NOW() AT TIME ZONE 'Asia/Dubai')::date)
+    `;
+    const matchingEvents = publishedEvents.filter((event) => selectedEventIds.has(event.id));
+    if (!matchingEvents.length) return res.status(400).json({ error: "The selected event is no longer accepting enquiries." });
+    for (const event of matchingEvents) {
+      const inquiryId = `gform-interest-${createHash("sha256").update(`${responseHash}:${event.id}`).digest("hex").slice(0, 40)}`;
+      await sql`
+        INSERT INTO event_ticket_inquiries (id, event_id, full_name, email, phone, request_type, request_notes)
+        VALUES (${inquiryId}, ${event.id}, ${name}, ${email}, ${phone}, 'event_interest', ${notes})
+        ON CONFLICT (id) DO NOTHING
+      `;
+    }
+    res.status(201).json({ received: true, events: matchingEvents.length });
+  } catch (error) { next(error); }
+});
+
 app.use("/api", async (req, res, next) => {
   if (req.path === "/health" || req.path.startsWith("/auth/") || req.path.startsWith("/mobile/")) return next();
   try {
@@ -1784,7 +1912,9 @@ app.get("/api/event-ticket-inquiries", async (req, res, next) => {
     if (!eventId) return res.status(400).json({ error: "Choose an event." });
     if (!sql) return res.json([]);
     const rows = await sql`
-      SELECT id, event_id AS "eventId", full_name AS name, email, phone, request_type AS "requestType", status,
+      SELECT id, event_id AS "eventId", full_name AS name, email, phone,
+        instagram_handle AS "instagramHandle", instagram_followers AS "instagramFollowers", creator_address AS "creatorAddress",
+        request_type AS "requestType", request_notes AS "requestNotes", status,
         created_at AS "createdAt"
       FROM event_ticket_inquiries
       WHERE event_id = ${eventId}
@@ -1801,13 +1931,48 @@ app.patch("/api/event-ticket-inquiries/:id", async (req, res, next) => {
     if (!["pending", "contacted", "closed", "accepted", "waitlisted", "declined"].includes(status))
       return res.status(400).json({ error: "Choose pending, contacted, or closed." });
     if (!sql) return res.status(404).json({ error: "Ticket inquiry not found." });
+    const entryCode = `CR-${randomBytes(5).toString("hex").toUpperCase()}`;
     const rows = await sql`
-      UPDATE event_ticket_inquiries SET status = ${status}
-      WHERE id = ${req.params.id}
-      RETURNING id, event_id AS "eventId", full_name AS name, email, phone, request_type AS "requestType", status, created_at AS "createdAt"
+      WITH changed AS (
+        UPDATE event_ticket_inquiries SET status = ${status}
+        WHERE id = ${req.params.id}
+        RETURNING id, event_id AS "eventId", full_name AS name, email, phone,
+          instagram_handle AS "instagramHandle", instagram_followers AS "instagramFollowers", creator_address AS "creatorAddress",
+          request_type AS "requestType", request_notes AS "requestNotes", status, created_at AS "createdAt"
+      ), event_details AS (
+        SELECT c.*, e.title AS "eventTitle", e.date::text AS date, e.time, e.venue, e.area
+        FROM changed c JOIN events e ON e.id = c."eventId"
+      ), issued_pass AS (
+        INSERT INTO guests (id, name, track, event_id, plus_ones, code, status)
+        SELECT 'creator-pass-' || d.id, d.name, 'Creators', d."eventId", 0, ${entryCode}, 'confirmed'
+        FROM event_details d WHERE d."requestType" = 'creator_pass' AND d.status = 'accepted'
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, event_id = EXCLUDED.event_id,
+          code = guests.code, status = 'confirmed'
+        RETURNING code
+      ), removed_pass AS (
+        DELETE FROM guests g USING event_details d
+        WHERE g.id = 'creator-pass-' || d.id AND d."requestType" = 'creator_pass' AND d.status <> 'accepted'
+        RETURNING g.id
+      )
+      SELECT d.*, p.code AS "entryCode"
+      FROM event_details d LEFT JOIN issued_pass p ON TRUE
     `;
     if (!rows[0]) return res.status(404).json({ error: "Ticket inquiry not found." });
-    res.json(rows[0]);
+    const request = rows[0];
+    const delivery = request.requestType === "creator_pass"
+      ? await sendCreatorPassDecisionEmail({
+        name: request.name,
+        email: request.email,
+        event: { title: request.eventTitle, date: request.date, time: request.time, venue: request.venue, area: request.area },
+        status,
+        entryCode: request.entryCode || "",
+      })
+      : { status: "skipped", message: "Ticket inquiry status saved." };
+    const phoneDigits = String(request.phone || "").replace(/\D/g, "");
+    const whatsappUrl = status === "accepted" && request.requestType === "creator_pass" && request.entryCode && phoneDigits
+      ? `https://wa.me/${phoneDigits}?text=${encodeURIComponent(`Your creator pass for ${request.eventTitle} is confirmed. Entry code: ${request.entryCode}. Please show this code at the door.`)}`
+      : "";
+    res.json({ request, delivery, whatsappUrl });
   } catch (error) { next(error); }
 });
 
@@ -2121,11 +2286,25 @@ app.patch("/api/applications/:id", async (req, res, next) => {
       await sql`UPDATE applications SET status = ${status}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING id, name, email, track, city, detail, followers, profile_url, handle, platform, mobile, outlet, application_role, all_profiles, source_track, password_hash, submitted, status`;
     const item = rows[0];
     if (!item) return res.status(404).json({ error: "Application not found." });
-    if (status === "approved")
-      await sql`INSERT INTO members (name, email, track, source_track, rank, points, events, city, profile_url, handle, platform, followers, mobile, outlet, member_role, all_profiles, status, joined, password_hash) VALUES (${item.name}, ${item.email}, ${item.track}, ${item.source_track || item.track}, 'Bronze', 10, 0, ${item.city}, ${item.profile_url || ""}, ${item.handle || ""}, ${item.platform || ""}, ${Number.parseInt(item.followers, 10) || 0}, ${item.mobile || ""}, ${item.outlet || ""}, ${item.application_role || ""}, ${item.all_profiles || ""}, 'approved', ${item.submitted}, ${item.password_hash}) ON CONFLICT (email) DO NOTHING`;
-    const approvalEmail = status === "approved" && current.status !== "approved"
-      ? await sendMembershipApprovalEmail({ name: item.name, email: item.email, track: item.track })
-      : null;
+    const newMember = status === "approved" ? await sql`
+      INSERT INTO members (name, email, track, source_track, rank, points, events, city, profile_url, handle, platform, followers, mobile, outlet, member_role, all_profiles, status, joined, password_hash)
+      VALUES (${item.name}, ${item.email}, ${item.track}, ${item.source_track || item.track}, 'Bronze', 10, 0, ${item.city}, ${item.profile_url || ""}, ${item.handle || ""}, ${item.platform || ""}, ${Number.parseInt(item.followers, 10) || 0}, ${item.mobile || ""}, ${item.outlet || ""}, ${item.application_role || ""}, ${item.all_profiles || ""}, 'approved', ${item.submitted}, ${item.password_hash})
+      ON CONFLICT (email) DO NOTHING RETURNING id
+    ` : [];
+    let approvalEmail = null;
+    if (status === "approved" && current.status !== "approved" && newMember[0]) {
+      if (item.password_hash) {
+        approvalEmail = await sendMembershipApprovalEmail({ name: item.name, email: item.email, track: item.track });
+      } else {
+        const token = randomBytes(32).toString("hex");
+        const tokenHash = createHash("sha256").update(token).digest("hex");
+        await sql`DELETE FROM member_password_resets WHERE member_id = ${newMember[0].id}`;
+        await sql`INSERT INTO member_password_resets (token_hash, member_id, expires_at) VALUES (${tokenHash}, ${newMember[0].id}, NOW() + INTERVAL '30 minutes')`;
+        const siteUrl = String(process.env.PUBLIC_SITE_URL || "https://www.rsvpdxb.com").replace(/\/$/, "");
+        approvalEmail = await sendMemberActivationEmail({ name: item.name, email: item.email, activationUrl: `${siteUrl}/reset-password?token=${token}` });
+        if (approvalEmail.status !== "submitted") await sql`DELETE FROM member_password_resets WHERE token_hash = ${tokenHash}`;
+      }
+    }
     const { password_hash: _passwordHash, ...safeItem } = item;
     res.json({ ...safeItem, ...(approvalEmail ? { approvalEmail } : {}) });
   } catch (error) {
