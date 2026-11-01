@@ -60,13 +60,19 @@ jobs:
           DISTRIBUTION_ID: EYHJHOX0AY6EP
           ORIGIN_ID: rsvp-admin-render-origin
           ENV_PARAMETER: /rsvp/prod/admin-env
+          GOOGLE_FORM_WEBHOOK_SECRET: ${{ secrets.GOOGLE_FORM_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
           IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           FUNCTION_ENV="$(aws ssm get-parameter --name "$ENV_PARAMETER" --with-decryption --query 'Parameter.Value' --output text --region "$AWS_REGION")"
-          GOOGLE_FORM_WEBHOOK_SECRET="$(printf '%s' "$FUNCTION_ENV" | jq -r '.GOOGLE_FORM_WEBHOOK_SECRET // empty')"
-          if [ "${#GOOGLE_FORM_WEBHOOK_SECRET}" -lt 32 ]; then
-            echo "::warning title=Google Form sync not configured::GOOGLE_FORM_WEBHOOK_SECRET is missing or too short in /rsvp/prod/admin-env. Admin deployment will continue, but Google Form submissions will not sync until this is configured."
+          SSM_FORM_SECRET="$(printf '%s' "$FUNCTION_ENV" | jq -r '.GOOGLE_FORM_WEBHOOK_SECRET // empty')"
+          if [ "${#GOOGLE_FORM_WEBHOOK_SECRET}" -ge 32 ]; then
+            FUNCTION_ENV="$(printf '%s' "$FUNCTION_ENV" | jq -c --arg secret "$GOOGLE_FORM_WEBHOOK_SECRET" '. + {GOOGLE_FORM_WEBHOOK_SECRET: $secret}')"
+          elif [ "${#SSM_FORM_SECRET}" -ge 32 ]; then
+            GOOGLE_FORM_WEBHOOK_SECRET="$SSM_FORM_SECRET"
+          else
+            GOOGLE_FORM_WEBHOOK_SECRET=""
+            echo "::warning title=Google Form sync not configured::Add a 32+ character GOOGLE_FORM_WEBHOOK_SECRET in GitHub repository Actions secrets or AWS /rsvp/prod/admin-env. Admin deployment will continue, but Google Form submissions will not sync."
           fi
           printf '%s' "$FUNCTION_ENV" | jq -c '{Variables: .}' > /tmp/lambda-environment.json
           if aws lambda get-function --function-name "$LAMBDA_FUNCTION" --region "$AWS_REGION" >/dev/null 2>&1; then
