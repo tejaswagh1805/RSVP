@@ -1,40 +1,33 @@
 // Paste this file into a new Google Apps Script project and fill in the config.
 const CREATOR_PASS_FORM_CONFIG = {
-  formTitle: "RSVP DXB Creator Pass Request",
+  // Use the client's existing Google Form; do not create a replacement.
+  formId: "1VvAsWM2fEU_4NILdJvtKy0D4cPkzTRbG9ODfe7bTwcM",
   eventId: "REPLACE_WITH_EVENT_ID",
   webhookUrl: "https://REPLACE_WITH_ADMIN_HOST/api/integrations/google-forms/creator-pass",
   webhookSecret: "REPLACE_WITH_THE_SAME_32_PLUS_CHARACTER_SECRET_AS_GOOGLE_FORM_WEBHOOK_SECRET",
 };
 
-function createCreatorPassForm() {
+function connectExistingCreatorPassForm() {
   const config = CREATOR_PASS_FORM_CONFIG;
-  if (config.eventId.startsWith("REPLACE_") || config.webhookUrl.includes("REPLACE_") || config.webhookSecret.includes("REPLACE_") || config.webhookSecret.length < 32) {
-    throw new Error("Fill in eventId, webhookUrl, and webhookSecret before running this function.");
+  if (config.formId.startsWith("REPLACE_") || config.eventId.startsWith("REPLACE_") || config.webhookUrl.includes("REPLACE_") || config.webhookSecret.includes("REPLACE_") || config.webhookSecret.length < 32) {
+    throw new Error("Fill in formId, eventId, webhookUrl, and webhookSecret before running this function.");
   }
 
-  const form = FormApp.create(config.formTitle);
-  form.setDescription("Request a creator pass for this RSVP DXB event. Submitting a request does not guarantee a place. The team reviews each profile and will follow up.");
-  form.setConfirmationMessage("Thank you. Your creator pass request has been sent to the RSVP DXB team for review.");
-  form.setAcceptingResponses(true);
-  form.addTextItem().setTitle("Full name").setRequired(true);
-  form.addTextItem().setTitle("Email address (optional)").setRequired(false);
-  form.addTextItem().setTitle("WhatsApp phone number with country code").setHelpText("Example: +971501234567").setRequired(true);
-  form.addTextItem().setTitle("Instagram or creator profile link (optional)").setRequired(false);
-  form.addParagraphTextItem().setTitle("Why would you like to attend? (optional)").setRequired(false);
-
-  const responseSheet = SpreadsheetApp.create(`${config.formTitle} responses`);
-  form.setDestination(FormApp.DestinationType.SPREADSHEET, responseSheet.getId());
+  const form = FormApp.openById(config.formId);
   PropertiesService.getScriptProperties().setProperties({
     CREATOR_PASS_FORM_ID: form.getId(),
     CREATOR_PASS_EVENT_ID: config.eventId,
     CREATOR_PASS_WEBHOOK_URL: config.webhookUrl,
     CREATOR_PASS_WEBHOOK_SECRET: config.webhookSecret,
   });
+  // Avoid duplicate webhook delivery if this setup function is run again.
+  ScriptApp.getProjectTriggers()
+    .filter((trigger) => trigger.getHandlerFunction() === "forwardCreatorPassRequest")
+    .forEach((trigger) => ScriptApp.deleteTrigger(trigger));
   ScriptApp.newTrigger("forwardCreatorPassRequest").forForm(form).onFormSubmit().create();
 
-  console.log(`Guest form: ${form.getPublishedUrl()}`);
+  console.log(`Connected guest form: ${form.getPublishedUrl()}`);
   console.log(`Form editor: ${form.getEditUrl()}`);
-  console.log(`Response sheet: ${responseSheet.getUrl()}`);
 }
 
 function forwardCreatorPassRequest(event) {
@@ -43,15 +36,20 @@ function forwardCreatorPassRequest(event) {
     itemResponse.getItem().getTitle(),
     String(itemResponse.getResponse() || "").trim(),
   ]));
+  // Support common client-form labels without changing the form itself.
+  const findAnswer = (labels) => {
+    const key = Object.keys(answers).find((title) => labels.some((label) => title.toLowerCase().includes(label)));
+    return key ? answers[key] : "";
+  };
   const response = UrlFetchApp.fetch(properties.getProperty("CREATOR_PASS_WEBHOOK_URL"), {
     method: "post",
     contentType: "application/json",
     headers: { Authorization: `Bearer ${properties.getProperty("CREATOR_PASS_WEBHOOK_SECRET")}` },
     payload: JSON.stringify({
       eventId: properties.getProperty("CREATOR_PASS_EVENT_ID"),
-      name: answers["Full name"] || "",
-      email: answers["Email address (optional)"] || "",
-      phone: answers["WhatsApp phone number with country code"] || "",
+      name: findAnswer(["full name", "your name", "name"]),
+      email: findAnswer(["email"]),
+      phone: findAnswer(["whatsapp", "phone", "mobile", "contact number"]),
     }),
     muteHttpExceptions: true,
   });
